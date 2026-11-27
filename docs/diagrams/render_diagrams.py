@@ -10,14 +10,14 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 
 class Figure:
-    def __init__(self, title, subtitle, height=1100):
+    def __init__(self, title, subtitle, height=1100, width=1600):
         self.height = height
         self.parts = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="{height}" viewBox="0 0 1600 {height}" role="img" aria-labelledby="title desc">',
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">',
             f'<title id="title">{escape(title)}</title>',
             f'<desc id="desc">{escape(subtitle)}</desc>',
             '<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#647d94"/></marker></defs>',
-            f'<rect width="1600" height="{height}" fill="white"/>',
+            f'<rect width="{width}" height="{height}" fill="white"/>',
             '<g font-family="DejaVu Sans, Arial, sans-serif">',
         ]
         self.text(64, 70, title, 37, weight=700)
@@ -71,28 +71,33 @@ def investigation():
 
 
 def scaling():
-    f = Figure("Test-time scaling and RSA", "Allocate compute across continuation, composition and independent discovery")
-    f.edge("M820 250V310")
-    f.edge("M820 400V450H410V500")
-    f.edge("M820 450V500")
-    f.edge("M820 450H1280V500")
-    f.edge("M410 610V680Q410 700 430 700H820", arrow=False)
-    f.edge("M1280 610V680Q1280 700 1260 700H820", arrow=False)
-    f.edge("M820 610V770")
-    # A single arrowhead at the population: assessment is the feedback origin.
-    f.edge("M520 825H110Q80 825 80 795V235Q80 205 110 205H520")
-    f.edge("M820 880V950")
-    f.node(520, 160, 600, 90, "Grounded lead population", accent=True, size=27)
-    f.node(500, 310, 640, 90, "Select leads + preserve reserve", accent=True, size=26)
-    f.node(230, 500, 360, 110, "K=1 · Close a witness", "One parent → next prerequisite", size=22)
-    f.node(640, 500, 360, 110, "K=2 · Compose leads", "Two parents → compatibility test", size=22)
-    f.node(1050, 500, 460, 110, "Fresh · Explore independently", "New perspective → cheapest test", size=22)
-    f.node(520, 770, 600, 110, "Execute + assess evidence", "Phase advance · prerequisite closure · refutation", True, size=26)
-    f.node(580, 950, 480, 90, "Validate, retain or record blocker", size=23)
-    f.text(110, 420, "Next generation", 18)
-    f.text(110, 449, "within budget", 18)
-    f.text(1005, 657, "Incompatible parents", 16, anchor="middle", fill="#536171")
-    f.text(1005, 682, "stay separate", 16, anchor="middle", fill="#536171")
+    f = Figure(
+        "How A1X explores attack ideas",
+        "Keep working on promising ideas, combine discoveries, and try new approaches.",
+        height=900, width=2000,
+    )
+    # Five columns, left to right. The three ways to explore are alternatives.
+    f.edge("M328 460H400")
+    f.edge("M700 460H770")
+    f.edge("M735 460V260H770")
+    f.edge("M735 460V660H770")
+    f.edge("M1120 260H1155V660H1120", arrow=False)
+    f.edge("M1120 460H1200")
+    f.edge("M1480 460H1550")
+    # Results feed another choice of tests; the loop has one arrowhead.
+    f.edge("M1550 495H1510Q1490 495 1490 515V770Q1490 790 1470 790H570Q550 790 550 770V515")
+    f.edge("M1740 515V610")
+    f.node(48, 405, 280, 110, "Find attack ideas", "Independent AI investigations", accent=True, size=24)
+    f.node(400, 405, 300, 110, "Choose the next tests", "Keep useful alternatives", accent=True, size=23)
+    f.node(770, 210, 350, 100, "Keep working on an idea", "Solve the next missing step", size=22)
+    f.node(770, 405, 350, 110, "Combine two ideas", "Check whether they fit together", size=24)
+    f.node(770, 610, 350, 100, "Try a new idea", "Look from a different angle", size=24)
+    f.node(1200, 405, 280, 110, "Run local tests", "Test ideas on a local fork", accent=True, size=24)
+    f.node(1550, 405, 380, 110, "Check the results", "Did the idea actually work?", accent=True, size=25)
+    f.node(1550, 610, 380, 100, "Confirm the finding", "Replay it and challenge it", size=24)
+    f.text(1760, 570, "Possible bug", 17)
+    f.text(1010, 826, "Use the results to choose the next round", 20, anchor="middle")
+    f.text(945, 555, "Keep separate if they do not fit.", 16, anchor="middle", fill="#536171")
     f.save("test-time-scaling-rsa")
 
 

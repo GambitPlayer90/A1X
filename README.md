@@ -63,7 +63,9 @@ Stagnation is tracked by lineage so unrelated discoveries cannot reset a stalled
 
 RSA iteratively creates new candidates from subsets of an existing population. A1X adapts the idea to vulnerability investigation by passing **grounded components and their artifacts** between generations: mechanisms, state prefixes, actor requirements, constraints, observations, and unresolved prerequisites.
 
-![A1X scaling: selected leads feed single-parent closure, pairwise composition, and independent search; executed results feed further exploration or validation.](docs/images/test-time-scaling-rsa.png)
+![Left-to-right A1X workflow: find attack ideas, choose tests, keep working on an idea or combine two ideas or try a new idea, run local tests, and check the results.](docs/images/test-time-scaling-rsa.png)
+
+*The three middle branches mean: continue one promising idea (K=1), combine two compatible ideas (K=2), or explore independently. Results guide the next round; possible bugs receive replay and further checks.*
 
 | Lane role | Input | Assigned task |
 | --- | --- | --- |
