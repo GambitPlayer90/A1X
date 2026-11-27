@@ -16,7 +16,9 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from a1x_runtime.actor_programs import create_actor_program, record_actor_execution, verify_actor_execution
 from a1x_runtime.campaign import add_hypothesis, add_obligation, init_campaign
+from a1x_runtime.composition import compose_components, create_component_contract, verify_composition
 from a1x_runtime.continuity import (
     create_continuation_contract,
     record_continuation_attempt,
@@ -25,6 +27,7 @@ from a1x_runtime.continuity import (
 from a1x_runtime.errors import ValidationError
 from a1x_runtime.explorer import retrieve_verified_contract
 from a1x_runtime.forks import start_fork, stop_fork
+from a1x_runtime.prerequisite_graph import create_backtrack_branch, create_prerequisite_graph, resolve_backtrack_branch, verify_prerequisite_graph
 from a1x_runtime.rpc import rpc_call
 from a1x_runtime.rpc_broker import uds_call
 from a1x_runtime.replay import prepare_replay, verify_replay
@@ -37,6 +40,7 @@ from a1x_runtime.security_oracles import (
     verify_oracle_evaluation,
 )
 from a1x_runtime.surface_graph import build_surface_graph
+from a1x_runtime.solver_adapters import create_solver_job, probe_solver_tools, validate_solver_job, verify_solver_job
 from a1x_runtime.trace_facts import analyze_run_trace, extract_trace_facts
 
 
@@ -482,6 +486,273 @@ if not rpc('evm_revert', [snapshot]):
         )
         self.assertTrue(evaluated["property_violated"])
         self.assertTrue(verify_oracle_evaluation(self.root, evaluated["id"])["valid"])
+
+    def test_real_three_mode_composition_multi_actor_and_solvers(self) -> None:
+        contracts = self.source / "contracts"
+        tests = self.source / "test"
+        contracts.mkdir()
+        tests.mkdir()
+        (contracts / "Fixture.sol").write_text("pragma solidity ^0.8.24; contract Fixture {}\n", encoding="utf-8")
+        composition_test = tests / "CompositionFixture.t.sol"
+        composition_test.write_text(
+            """pragma solidity ^0.8.24;
+interface Vm { function warp(uint256) external; function prank(address) external; }
+contract Producer { uint256 public value; function prepare() external { value = 7; } }
+contract Consumer { function consume(Producer producer) external view returns (uint256) { require(producer.value() == 7); return 8; } }
+interface IHook { function callback() external; }
+contract NestedTarget {
+    bool public inside; bool public observed;
+    function start(IHook hook) external { inside = true; hook.callback(); inside = false; require(observed); }
+    function observe() external { require(inside); observed = true; }
+}
+contract Hook is IHook { NestedTarget public target; constructor(NestedTarget value) { target = value; } function callback() external { target.observe(); } }
+contract TemporalTarget {
+    uint256 public readyAt; bool public consumed;
+    function prepare() external { readyAt = block.timestamp + 100; }
+    function consume() external { require(block.timestamp >= readyAt); consumed = true; }
+}
+contract ActorLedger { address[] public order; function record() external { order.push(msg.sender); } }
+contract CompositionFixtureTest {
+    Vm constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    function testSequential() public { Producer a = new Producer(); Consumer b = new Consumer(); a.prepare(); require(b.consume(a) == 8); }
+    function testNestedCallback() public { NestedTarget a = new NestedTarget(); Hook b = new Hook(a); a.start(b); require(a.observed()); }
+    function testTemporal() public { TemporalTarget a = new TemporalTarget(); a.prepare(); vm.warp(block.timestamp + 100); a.consume(); require(a.consumed()); }
+    function testMultiActor() public { ActorLedger ledger = new ActorLedger(); address attacker = address(0xA11CE); address victim = address(0xB0B); vm.prank(attacker); ledger.record(); vm.prank(victim); ledger.record(); vm.prank(attacker); ledger.record(); require(ledger.order(0) == attacker && ledger.order(1) == victim && ledger.order(2) == attacker); }
+    function testSolverBoundary() public pure { uint256 x = 5; uint256 y = 1; require(3 * x + 2 * y >= 17 && x >= y); }
+}
+""",
+            encoding="utf-8",
+        )
+        config = self.source / "foundry.toml"
+        config.write_text('[profile.default]\nsrc = "contracts"\ntest = "test"\nout = "out"\ncache_path = "cache"\n', encoding="utf-8")
+        obligation = add_obligation(
+            self.root,
+            title="composition topologies",
+            statement="components preserve required state across sequential, nested, temporal, and actor boundaries",
+            boundary="top-level replay",
+            units="boolean predicates",
+            oracle="all five integration tests pass",
+        )
+        hypothesis = add_hypothesis(
+            self.root,
+            obligation_id=obligation["id"],
+            mechanism="component B consumes a state established by component A",
+            sequence="sequential, callback, temporal, and attacker-victim-attacker",
+            support_prediction="all topology fixtures execute",
+            refute_prediction="a topology fixture reverts",
+            next_action="record components and actor program",
+        )
+        planned = plan_run(
+            self.root,
+            hypothesis_id=hypothesis["id"],
+            run_class="candidate",
+            cwd=self.source,
+            argv=["forge", "test", "-vvvv"],
+            timeout_seconds=90,
+            max_output_bytes=8_000_000,
+            inputs=[config, contracts, tests],
+            property_statement="all declared composition programs execute",
+            support_prediction="five Foundry tests pass",
+            refute_prediction="one or more Foundry tests fail",
+            success_regex="5 passed",
+            pass_env=[],
+            inherit_env=[],
+            fork_id=None,
+        )
+        run_id = planned["run_id"]
+        receipt = execute_run(self.root, run_id)
+        self.assertTrue(receipt["mechanical_success"], (self.root / "runs" / run_id / "stderr.log").read_text())
+        observe_run(
+            self.root,
+            run_id,
+            outcome="supports",
+            property_violated=True,
+            observation="sequential, nested, temporal, multi-actor, and solver fixtures executed",
+            impact="integration fixture only",
+            metrics=[],
+            limitations="synthetic composition contracts",
+        )
+        workspace = Path(self.temporary.name) / "composition-replay"
+        prepare_replay(self.root, run_id=run_id, destination=workspace)
+        replay = verify_replay(self.root, run_id=run_id, workspace=workspace)
+        self.assertTrue(replay["passed"], replay)
+        run_ref = {"type": "run-receipt", "run_id": run_id, "outcome": "supports"}
+        replay_ref = {"type": "replay", "replay_id": replay["id"]}
+        trace_ref = {"type": "trace-artifact", "run_id": run_id, "path": "stdout.log"}
+
+        continuation = create_continuation_contract(
+            self.root,
+            {
+                "parent_run": run_id,
+                "parent_handoff": None,
+                "lineage_id": "LINEAGE-composition",
+                "closure_mode": "witness",
+                "execution_topology": "nested-atomic",
+                "checkpoint": {
+                    "kind": "transaction-waypoint",
+                    "transaction_index": 0,
+                    "waypoint": {"frame_path": [1], "program_counter": 0, "occurrence": 1, "description": "hook callback insertion", "evidence_refs": [trace_ref]},
+                },
+                "actors": [{"id": "attacker", "role": "caller", "address": None, "capabilities": ["call public functions"], "authority_basis": "unprivileged test caller"}],
+                "transactions": [{"index": 0, "actor": "attacker", "action": "execute topology fixture", "boundary": "callback", "expected_effects": ["consumer executes"], "obligations_created": []}],
+                "assertions": [{"id": "fixtures-pass", "predicate": "five Foundry fixtures pass", "expected": "true", "scope": "top-level replay", "required": True, "evidence_refs": [run_ref]}],
+                "preserve_assertions": ["fixtures-pass"],
+                "selected_prerequisite": {"id": "PREREQ-compose", "predicate": "B receives A state", "success_condition": "all topologies execute", "artificial": False, "dependencies": []},
+                "reachability": {"predicate": "public fixture calls", "writer_paths": []},
+            },
+        )
+        attempt = record_continuation_attempt(
+            self.root,
+            continuation["id"],
+            {
+                "replay_id": replay["id"],
+                "result": "resolved",
+                "assertions": [{"id": "fixtures-pass", "passed": True, "observed": "all fixtures replayed", "evidence_refs": [replay_ref]}],
+                "prerequisite_observation": "all declared edges executed",
+                "next_action": "compose component contracts",
+            },
+        )
+
+        graph = create_prerequisite_graph(
+            self.root,
+            {
+                "mechanism": "producer effect satisfies consumer prerequisite",
+                "nodes": [
+                    {"id": "P-ready", "lineage_id": "LINEAGE-A", "description": "producer is ready", "predicate": "value equals seven", "kind": "state", "status": "resolved", "dependencies": [], "conflicts": [], "preserves": ["fixtures-pass"], "evidence_refs": [run_ref]},
+                    {"id": "P-consume", "lineage_id": "LINEAGE-B", "description": "consumer executes", "predicate": "consume returns eight", "kind": "settlement", "status": "open", "dependencies": ["P-ready"], "conflicts": [], "preserves": ["fixtures-pass"], "evidence_refs": []},
+                ],
+                "equivalences": [],
+            },
+        )
+        self.assertTrue(verify_prerequisite_graph(self.root, graph["id"])["valid"])
+        branch = create_backtrack_branch(
+            self.root,
+            graph["id"],
+            {
+                "prerequisite_id": "P-consume",
+                "continuation_id": continuation["id"],
+                "revision_scope": "ordering",
+                "dead_end": "consumer before producer reverts",
+                "revision": "execute producer before consumer",
+                "preserve_assertions": ["fixtures-pass"],
+                "dead_end_evidence_refs": [run_ref],
+            },
+        )
+        resolved_branch = resolve_backtrack_branch(self.root, branch["id"], attempt_id=attempt["id"])
+        self.assertEqual(resolved_branch["status"], "resolved")
+
+        actor_program = create_actor_program(
+            self.root,
+            {
+                "name": "attacker victim attacker ordering",
+                "actors": [
+                    {"id": "attacker", "role": "attacker", "address": "0x00000000000000000000000000000000000a11ce", "capabilities": ["submit transaction"], "honest_policy": None, "authority_basis": "public caller"},
+                    {"id": "victim", "role": "victim", "address": "0x0000000000000000000000000000000000000b0b", "capabilities": ["submit honest transaction"], "honest_policy": "record once", "authority_basis": "ordinary user"},
+                ],
+                "steps": [
+                    {"index": 0, "actor": "attacker", "boundary": "transaction", "action": "record pre-action", "target": "ActorLedger", "preconditions": [], "expected_effects": ["attacker first"]},
+                    {"index": 1, "actor": "victim", "boundary": "transaction", "action": "record honest action", "target": "ActorLedger", "preconditions": ["attacker first"], "expected_effects": ["victim second"]},
+                    {"index": 2, "actor": "attacker", "boundary": "transaction", "action": "record post-action", "target": "ActorLedger", "preconditions": ["victim second"], "expected_effects": ["attacker third"]},
+                ],
+                "ordering_assumptions": ["transactions are included in the declared local-fork order"],
+                "mempool_model": "explicit ordering only; no claim of public mempool realizability",
+            },
+        )
+        actor_execution = record_actor_execution(
+            self.root,
+            actor_program_id=actor_program["id"],
+            run_id=run_id,
+            replay_id=replay["id"],
+            observed_steps=[
+                {"index": 0, "executed": True, "observation": "attacker first"},
+                {"index": 1, "executed": True, "observation": "victim second"},
+                {"index": 2, "executed": True, "observation": "attacker third"},
+            ],
+            evidence_refs=[run_ref, replay_ref],
+        )
+        self.assertTrue(verify_actor_execution(self.root, actor_execution["id"])["valid"])
+
+        component_a = create_component_contract(
+            self.root,
+            {
+                "name": "producer",
+                "lineage_id": "LINEAGE-A",
+                "target_identity": "composition-fixture",
+                "actor_capabilities": ["call prepare"],
+                "preconditions": [],
+                "effects": [{"id": "ready", "kind": "state", "predicate": "producer value", "value": "7"}],
+                "resources_consumed": [],
+                "obligations_created": [],
+                "invalidates": [],
+                "transaction_context": "top-level or outer prefix",
+                "callback_context": "before hook callback",
+                "temporal_context": "at t0",
+                "evidence_refs": [run_ref],
+            },
+        )
+        component_b = create_component_contract(
+            self.root,
+            {
+                "name": "consumer",
+                "lineage_id": "LINEAGE-B",
+                "target_identity": "composition-fixture",
+                "actor_capabilities": ["call consume"],
+                "preconditions": [{"id": "ready", "kind": "state", "predicate": "producer value", "value": "7"}],
+                "effects": [{"id": "consumed", "kind": "state", "predicate": "consumer result", "value": "8"}],
+                "resources_consumed": [],
+                "obligations_created": [],
+                "invalidates": [],
+                "transaction_context": "top-level or nested callback",
+                "callback_context": "hook body",
+                "temporal_context": "at t1",
+                "evidence_refs": [run_ref],
+            },
+        )
+        common = {
+            "left_component": component_a["id"],
+            "right_component": component_b["id"],
+            "precondition_checks": [{"precondition_id": "ready", "supplied_by": "ready", "passed": True, "observed": "producer value equals seven", "evidence_refs": [run_ref]}],
+            "run_id": run_id,
+            "replay_id": replay["id"],
+            "actor_program_id": actor_program["id"],
+            "evidence_refs": [run_ref, replay_ref],
+        }
+        compositions = []
+        for topology, details in (
+            ("sequential", {"left_transaction": 0, "right_transaction": 1}),
+            ("nested", {"continuation_id": continuation["id"], "insertion": "hook.callback", "outer_prefix": "inside=true", "outer_suffix": "inside=false and observed asserted"}),
+            ("temporal", {"delay_kind": "seconds", "amount": 100, "transition": "vm.warp by 100 seconds"}),
+        ):
+            payload = dict(common)
+            payload.update({"topology": topology, "topology_details": details})
+            composition = compose_components(self.root, payload)
+            self.assertTrue(verify_composition(self.root, composition["id"])["valid"])
+            compositions.append(composition)
+        self.assertEqual({item["topology"] for item in compositions}, {"sequential", "nested", "temporal"})
+
+        solver_problem = {
+            "question": "find the smallest boundary satisfying the exact integer constraints",
+            "variables": [{"name": "x", "min": 0, "max": 20, "step": 1}, {"name": "y", "min": 0, "max": 20, "step": 1}],
+            "constraints": [
+                {"lhs": {"coefficients": {"x": 3, "y": 2}, "constant": 0}, "operator": ">=", "rhs": 17},
+                {"lhs": {"coefficients": {"x": 1, "y": -1}, "constant": 0}, "operator": ">=", "rhs": 0},
+            ],
+            "objective": {"sense": "min", "expression": {"coefficients": {"x": 1, "y": 1}, "constant": 0}},
+            "maximum_models": 8,
+            "maximum_evaluations": 1000,
+        }
+        exact = create_solver_job(self.root, solver_problem, backend="python-exact")
+        z3_job = create_solver_job(self.root, solver_problem, backend="z3-python")
+        self.assertTrue(exact["result"]["satisfiable"])
+        self.assertTrue(z3_job["result"]["satisfiable"])
+        self.assertEqual(exact["result"]["models"][0]["objective"], z3_job["result"]["models"][0]["objective"])
+        for job in (exact, z3_job):
+            validated = validate_solver_job(self.root, solver_job_id=job["id"], run_id=run_id, replay_id=replay["id"])
+            self.assertEqual(validated["status"], "concretely-replayed")
+            self.assertTrue(verify_solver_job(self.root, job["id"])["valid"])
+        tools = probe_solver_tools()
+        self.assertTrue(tools["foundry"]["version_probe_passed"])
+        self.assertTrue(tools["z3-python"]["version_probe_passed"])
 
     def test_scale_lane_receives_tools_wake_mcp_and_no_upstream_secret(self) -> None:
         capabilities = self.root / "capabilities" / "capabilities.json"

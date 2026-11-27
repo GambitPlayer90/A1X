@@ -1825,16 +1825,22 @@ def create_recombination_round(
     )[: min(closure_lanes, children)]
 
     pairs = list(combinations(eligible, 2))
-    pairs.sort(
-        key=lambda pair: (
-            pair[0]["lane_id"] in reserve_ids or pair[1]["lane_id"] in reserve_ids,
-            _composition_priority(pair[0], pair[1]),
-            tuple(sum(values) for values in zip(_fitness(pair[0]), _fitness(pair[1]))),
+    pair_topologies = [
+        (left, right, topology)
+        for left, right in pairs
+        for topology in ("sequential", "nested", "temporal")
+    ]
+    pair_topologies.sort(
+        key=lambda candidate: (
+            candidate[0]["lane_id"] in reserve_ids or candidate[1]["lane_id"] in reserve_ids,
+            _composition_priority(candidate[0], candidate[1]),
+            tuple(sum(values) for values in zip(_fitness(candidate[0]), _fitness(candidate[1]))),
+            {"sequential": 2, "nested": 1, "temporal": 0}[candidate[2]],
         ),
         reverse=True,
     )
-    pair_count = min(max(0, children - len(closure_parents)), len(pairs))
-    if not closure_parents and not pairs:
+    pair_count = min(max(0, children - len(closure_parents)), len(pair_topologies))
+    if not closure_parents and not pair_topologies:
         raise ValidationError("evolution requires a witness-closure lead or two composable grounded handoffs")
     total = len(closure_parents) + pair_count + fresh_lanes
     maximum = int(campaign["budgets"].get("max_scale_lanes", 0))
@@ -1896,7 +1902,7 @@ Parent:
             }
         )
 
-    for left, right in pairs[:pair_count]:
+    for left, right, topology in pair_topologies[:pair_count]:
         index = len(lanes) + 1
         lane_id = f"LANE-{index:04d}"
         lane_dir = lanes_dir / lane_id
@@ -1906,9 +1912,16 @@ Parent:
             "A": _export_parent_packet(root, parent_packet, "A", left, parent_round),
             "B": _export_parent_packet(root, parent_packet, "B", right, parent_round),
         }
-        base_prompt = f"""You are an A1X recursive self-aggregation lane.
+        topology_instruction = {
+            "sequential": "Test A then B across explicit transaction boundaries. Assert A's effects before checking and executing B's preconditions.",
+            "nested": "Test A_prefix -> B -> A_suffix inside one top-level transaction. Identify the callback insertion point and replay the entire transaction; never resume from a synthetic mid-transaction state.",
+            "temporal": "Test A at t0, an explicit time/block/epoch/keeper transition, then B at t1. Record the exact local-fork transition and every ordering assumption.",
+        }[topology]
+        base_prompt = f"""You are an A1X recursive self-aggregation lane assigned the `{topology}` composition topology.
 
 Determine whether the two parent components are semantically compatible. Do not merge narratives by default. Reconstruct prerequisites, actor capabilities, ordering, state, and protocol property. Parent artifacts are mounted read-only at `.a1x-parent-evidence/`; verify and reuse concrete setup or harness fragments rather than reconstructing them from prose. Prefer an explicit dependency edge, a resolved inherited prerequisite, or an advanced witness phase. A stronger consumer is progress only when setup taint and open prerequisites do not regress. If compatible, create and execute a concrete child experiment and compare it with both parents. If incompatible, preserve both parents as separate evidence and record the incompatibility; do not downgrade or refute either parent solely because they cannot compose. Close a parent only with mechanism-specific negative evidence eliminating a necessary transition under its real attacker model.
+
+{topology_instruction}
 
 Parent A:
 {json.dumps(left, sort_keys=True, indent=2)}
@@ -1916,7 +1929,7 @@ Parent A:
 Parent B:
 {json.dumps(right, sort_keys=True, indent=2)}
 """
-        axis = f"compatibility-test:{left['lane_id']}+{right['lane_id']}"
+        axis = f"compatibility-test:{topology}:{left['lane_id']}+{right['lane_id']}"
         write_text_atomic(
             lane_dir / "prompt.md",
             _lane_prompt(lane_id=lane_id, axis=axis, base_prompt=base_prompt, hypothesis_id=None),
@@ -1928,6 +1941,7 @@ Parent B:
                 "status": "planned",
                 "path": f"lanes/{lane_id}",
                 "lane_role": "recombination",
+                "composition_topology": topology,
                 "lineage_id": composition_lineage_id(left, right),
                 "parent_handoffs": [
                     {"round_id": parent_round, "lane_id": left["lane_id"]},

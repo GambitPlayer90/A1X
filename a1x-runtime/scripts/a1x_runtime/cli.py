@@ -10,6 +10,7 @@ from typing import Any, Callable
 from . import __version__
 from .adapters import capability_matrix, probe_target
 from .artifacts import ingest_artifact, materialize_artifact, verify_artifact
+from .actor_programs import create_actor_program, record_actor_execution, verify_actor_execution
 from .blind_review import execute_blind_review, prepare_blind_review
 from .campaign import add_hypothesis, add_obligation, doctor, init_campaign, migrate_campaign, save_doctor, show_campaign
 from .candidates import add_review, check_gates, create_candidate, promote_validated
@@ -25,6 +26,7 @@ from .controller import (
     resolve_impact,
 )
 from .continuity import create_continuation_contract, record_continuation_attempt, verify_continuation_contract
+from .composition import compose_components, create_component_contract, verify_composition
 from .errors import A1XError
 from .evidence_bundles import create_bundle, load_bundle, verify_bundle
 from .explorer import retrieve_verified_contract, show_retrieval
@@ -35,12 +37,14 @@ from .replay import prepare_replay, verify_replay
 from .operations import propose_operation, recommend_next, transition_operation
 from .mcp_server import serve_stdio
 from .prestate import serve_http_bridge, serve_proxy
+from .prerequisite_graph import create_backtrack_branch, create_prerequisite_graph, resolve_backtrack_branch, verify_prerequisite_graph
 from .recon import active_recon, create_recon_pack
 from .records import verify_event_chain
 from .rsa import build_compatibility_graph, create_evidence_round
 from .runs import execute_run, observe_run, plan_run
 from .scale import aggregate_round, auto_select_frontier, create_recombination_round, create_round, evolve_population, run_round, select_frontier
 from .security_oracles import create_security_oracle, evaluate_security_oracle, standard_oracle_profile, verify_oracle_evaluation
+from .solver_adapters import create_solver_job, probe_solver_tools, register_external_solver_job, validate_solver_job, verify_solver_job
 from .surface_graph import build_surface_graph
 from .trace_facts import analyze_run_trace
 
@@ -301,6 +305,87 @@ def build_parser() -> argparse.ArgumentParser:
     oracle_verify.add_argument("--root", required=True, type=_root)
     oracle_verify.add_argument("--evaluation", required=True)
     oracle_verify.set_defaults(handler=lambda a: verify_oracle_evaluation(a.root, a.evaluation))
+
+    prerequisite = commands.add_parser("prerequisite", help="manage executable prerequisite graphs and backtracking")
+    prerequisite_sub = prerequisite.add_subparsers(dest="prerequisite_command", required=True)
+    prerequisite_create = prerequisite_sub.add_parser("create")
+    prerequisite_create.add_argument("--root", required=True, type=_root)
+    prerequisite_create.add_argument("--json", required=True, type=_root)
+    prerequisite_create.set_defaults(handler=lambda a: create_prerequisite_graph(a.root, _load_json(a.json)))
+    prerequisite_verify = prerequisite_sub.add_parser("verify")
+    prerequisite_verify.add_argument("--root", required=True, type=_root)
+    prerequisite_verify.add_argument("--graph", required=True)
+    prerequisite_verify.set_defaults(handler=lambda a: verify_prerequisite_graph(a.root, a.graph))
+    prerequisite_backtrack = prerequisite_sub.add_parser("backtrack")
+    prerequisite_backtrack.add_argument("--root", required=True, type=_root)
+    prerequisite_backtrack.add_argument("--graph", required=True)
+    prerequisite_backtrack.add_argument("--json", required=True, type=_root)
+    prerequisite_backtrack.set_defaults(handler=lambda a: create_backtrack_branch(a.root, a.graph, _load_json(a.json)))
+    prerequisite_resolve = prerequisite_sub.add_parser("resolve-backtrack")
+    prerequisite_resolve.add_argument("--root", required=True, type=_root)
+    prerequisite_resolve.add_argument("--branch", required=True)
+    prerequisite_resolve.add_argument("--attempt", required=True)
+    prerequisite_resolve.set_defaults(handler=lambda a: resolve_backtrack_branch(a.root, a.branch, attempt_id=a.attempt))
+
+    component = commands.add_parser("component", help="define and execute three-topology RSA component composition")
+    component_sub = component.add_subparsers(dest="component_command", required=True)
+    component_create = component_sub.add_parser("create")
+    component_create.add_argument("--root", required=True, type=_root)
+    component_create.add_argument("--json", required=True, type=_root)
+    component_create.set_defaults(handler=lambda a: create_component_contract(a.root, _load_json(a.json)))
+    component_compose = component_sub.add_parser("compose")
+    component_compose.add_argument("--root", required=True, type=_root)
+    component_compose.add_argument("--json", required=True, type=_root)
+    component_compose.set_defaults(handler=lambda a: compose_components(a.root, _load_json(a.json)))
+    component_verify = component_sub.add_parser("verify")
+    component_verify.add_argument("--root", required=True, type=_root)
+    component_verify.add_argument("--composition", required=True)
+    component_verify.set_defaults(handler=lambda a: verify_composition(a.root, a.composition))
+
+    actors = commands.add_parser("actors", help="define and replay multi-actor adversarial programs")
+    actors_sub = actors.add_subparsers(dest="actors_command", required=True)
+    actors_create = actors_sub.add_parser("create")
+    actors_create.add_argument("--root", required=True, type=_root)
+    actors_create.add_argument("--json", required=True, type=_root)
+    actors_create.set_defaults(handler=lambda a: create_actor_program(a.root, _load_json(a.json)))
+    actors_execute = actors_sub.add_parser("execute")
+    actors_execute.add_argument("--root", required=True, type=_root)
+    actors_execute.add_argument("--program", required=True)
+    actors_execute.add_argument("--run", required=True)
+    actors_execute.add_argument("--replay", required=True)
+    actors_execute.add_argument("--steps", required=True, type=_root)
+    actors_execute.add_argument("--evidence-ref", action="append", default=[])
+    actors_execute.set_defaults(handler=lambda a: record_actor_execution(a.root, actor_program_id=a.program, run_id=a.run, replay_id=a.replay, observed_steps=_load_json(a.steps), evidence_refs=_evidence_refs(a.evidence_ref)))
+    actors_verify = actors_sub.add_parser("verify")
+    actors_verify.add_argument("--root", required=True, type=_root)
+    actors_verify.add_argument("--execution", required=True)
+    actors_verify.set_defaults(handler=lambda a: verify_actor_execution(a.root, a.execution))
+
+    solver = commands.add_parser("solver", help="run bounded exact/Z3 search and register verified specialist jobs")
+    solver_sub = solver.add_subparsers(dest="solver_command", required=True)
+    solver_probe = solver_sub.add_parser("probe")
+    solver_probe.set_defaults(handler=lambda a: probe_solver_tools())
+    solver_create = solver_sub.add_parser("create")
+    solver_create.add_argument("--root", required=True, type=_root)
+    solver_create.add_argument("--backend", choices=["python-exact", "z3-python"], required=True)
+    solver_create.add_argument("--json", required=True, type=_root)
+    solver_create.set_defaults(handler=lambda a: create_solver_job(a.root, _load_json(a.json), backend=a.backend))
+    solver_register = solver_sub.add_parser("register-external")
+    solver_register.add_argument("--root", required=True, type=_root)
+    solver_register.add_argument("--backend", required=True)
+    solver_register.add_argument("--run", required=True)
+    solver_register.add_argument("--evidence-ref", action="append", default=[])
+    solver_register.set_defaults(handler=lambda a: register_external_solver_job(a.root, backend=a.backend, run_id=a.run, witness_refs=_evidence_refs(a.evidence_ref)))
+    solver_validate = solver_sub.add_parser("validate")
+    solver_validate.add_argument("--root", required=True, type=_root)
+    solver_validate.add_argument("--solver-job", required=True)
+    solver_validate.add_argument("--run", required=True)
+    solver_validate.add_argument("--replay", required=True)
+    solver_validate.set_defaults(handler=lambda a: validate_solver_job(a.root, solver_job_id=a.solver_job, run_id=a.run, replay_id=a.replay))
+    solver_verify = solver_sub.add_parser("verify")
+    solver_verify.add_argument("--root", required=True, type=_root)
+    solver_verify.add_argument("--solver-job", required=True)
+    solver_verify.set_defaults(handler=lambda a: verify_solver_job(a.root, a.solver_job))
 
     recon = commands.add_parser("recon", help="manage immutable versioned Recon Packs")
     recon_sub = recon.add_subparsers(dest="recon_command", required=True)

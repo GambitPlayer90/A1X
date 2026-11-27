@@ -53,8 +53,36 @@ def compatibility(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]
     if rp.get("consumer") and rp.get("consumer") == lp.get("writer"):
         edges.append("right-consumer-to-left-writer")
     shared = sorted(set(lp.get("state_keys", [])) & set(rp.get("state_keys", [])))
+    topologies = ["sequential"]
+    if any(
+        value
+        for value in (
+            lp.get("callback_context"),
+            rp.get("callback_context"),
+            lp.get("transient_window"),
+            rp.get("transient_window"),
+        )
+    ):
+        topologies.append("nested")
+    if any(
+        value
+        for value in (
+            lp.get("temporal_context"),
+            rp.get("temporal_context"),
+            lp.get("block_transition"),
+            rp.get("block_transition"),
+        )
+    ):
+        topologies.append("temporal")
     score = len(edges) * 4 + len(shared) + (left.get("payload_type") != right.get("payload_type"))
-    return {"compatible": not contradictions, "contradictions": contradictions, "causal_edges": edges, "shared_state": shared, "score": score}
+    return {
+        "compatible": not contradictions,
+        "contradictions": contradictions,
+        "causal_edges": edges,
+        "shared_state": shared,
+        "composition_topologies": topologies,
+        "score": score,
+    }
 
 
 def build_compatibility_graph(root: Path, evidence_ids: list[str], *, idempotency_key: str | None = None, campaign_epoch: int | None = None) -> dict[str, Any]:

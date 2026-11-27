@@ -329,6 +329,13 @@ class A1XV4Test(unittest.TestCase):
         self.assertEqual(child["lanes"][0]["lineage_id"], "LINEAGE-balancer")
         self.assertEqual(child["lanes"][1]["lane_role"], "recombination")
         self.assertIn("Do not switch targets", (self.root / "scale" / child["id"] / "lanes" / "LANE-0001" / "prompt.md").read_text())
+        full = create_recombination_round(
+            self.root, parent_round=round_id, children=4, closure_lanes=1, fresh_lanes=0, per_lane_timeout=60,
+        )
+        self.assertEqual(
+            {item.get("composition_topology") for item in full["lanes"] if item["lane_role"] == "recombination"},
+            {"sequential", "nested", "temporal"},
+        )
 
     def test_mcp_config_detection_is_structural(self) -> None:
         self.assertFalse(_has_mcp_server("# [mcp_servers.wake-lane]\n", "wake-lane"))
