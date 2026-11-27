@@ -46,6 +46,7 @@ def main() -> int:
         "--chain-id", str(config["chain_id"]),
         "--fork-url", local_proxy_url,
         "--fork-block-number", str(config["block_number"]),
+        "--steps-tracing",
         "--silent",
     ]
     child_env = dict(os.environ)

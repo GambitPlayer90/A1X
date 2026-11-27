@@ -30,6 +30,14 @@ from a1x_runtime.rpc_broker import uds_call
 from a1x_runtime.replay import prepare_replay, verify_replay
 from a1x_runtime.runs import execute_run, observe_run, plan_run
 from a1x_runtime.scale import create_round, run_round
+from a1x_runtime.security_oracles import (
+    create_security_oracle,
+    evaluate_security_oracle,
+    standard_oracle_profile,
+    verify_oracle_evaluation,
+)
+from a1x_runtime.surface_graph import build_surface_graph
+from a1x_runtime.trace_facts import analyze_run_trace, extract_trace_facts
 
 
 def _port() -> int:
@@ -50,7 +58,7 @@ class BrokerIntegrationTest(unittest.TestCase):
         self.root = base / "campaign"
         self.upstream_port = _port()
         self.upstream = subprocess.Popen(
-            [shutil.which("anvil") or "anvil", "--host", "127.0.0.1", "--port", str(self.upstream_port), "--chain-id", "1", "--silent"],
+            [shutil.which("anvil") or "anvil", "--host", "127.0.0.1", "--port", str(self.upstream_port), "--chain-id", "1", "--steps-tracing", "--silent"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         endpoint = f"http://127.0.0.1:{self.upstream_port}"
@@ -232,6 +240,14 @@ if not rpc('evm_revert', [snapshot]):
             metrics=[],
             limitations="local deterministic fixture",
         )
+        analyzed = analyze_run_trace(
+            self.root,
+            run_id=run_id,
+            path="stdout.log",
+            declared_metrics=[{"name": "slot_delta", "before": "0", "after": "1", "unit": "wei", "role": "state"}],
+        )
+        self.assertEqual(analyzed["facts"]["writes"][0]["op"], "SSTORE")
+        self.assertTrue(analyzed["facts"]["residuals"][0]["micro_residual"])
         replay_workspace = Path(self.temporary.name) / "continuation-replay"
         prepare_replay(self.root, run_id=run_id, destination=replay_workspace)
         replay = verify_replay(self.root, run_id=run_id, workspace=replay_workspace)
@@ -317,6 +333,155 @@ if not rpc('evm_revert', [snapshot]):
             },
         )
         self.assertEqual(attempt["result"], "advanced")
+
+    def test_real_anvil_trace_facts_and_pinned_surface(self) -> None:
+        endpoint = os.environ["A1X_TEST_RPC_URL"]
+        sender = rpc_call(endpoint, "eth_accounts")[0]
+
+        def wait_receipt(transaction: str) -> dict:
+            for _ in range(100):
+                receipt = rpc_call(endpoint, "eth_getTransactionReceipt", [transaction])
+                if receipt:
+                    return receipt
+                time.sleep(0.01)
+            self.fail(f"transaction was not mined: {transaction}")
+
+        def deploy_and_trace(runtime: str) -> tuple[str, dict]:
+            length = len(bytes.fromhex(runtime))
+            self.assertLess(length, 256)
+            init = f"60{length:02x}600c60003960{length:02x}6000f3" + runtime
+            deployed = rpc_call(endpoint, "eth_sendTransaction", [{"from": sender, "data": "0x" + init, "gas": "0x100000"}])
+            address = wait_receipt(deployed)["contractAddress"]
+            self.assertEqual(rpc_call(endpoint, "eth_getCode", [address, "latest"]), "0x" + runtime)
+            called = rpc_call(endpoint, "eth_sendTransaction", [{"from": sender, "to": address, "gas": "0x100000"}])
+            wait_receipt(called)
+            trace = rpc_call(endpoint, "debug_traceTransaction", [called, {"disableMemory": True, "disableStack": False, "disableStorage": False}])
+            return address, trace
+
+        transient_address, transient_trace = deploy_and_trace("600160005d600260005d00")
+        transient = extract_trace_facts(
+            transient_trace,
+            declared_metrics=[{"name": "internal_credit", "before": "0", "after": "1", "unit": "wei", "role": "state"}],
+        )
+        self.assertEqual(
+            [item["op"] for item in transient["writes"]],
+            ["TSTORE", "TSTORE"],
+            transient_trace,
+        )
+        self.assertTrue(transient["overwrites"][0]["restored_or_overwritten"])
+        self.assertTrue(transient["residuals"][0]["micro_residual"])
+
+        _, reverted_trace = deploy_and_trace("600160005560006000fd")
+        reverted = extract_trace_facts(reverted_trace)
+        self.assertTrue(reverted["failed"])
+        self.assertTrue(reverted["writes"][0]["reverted"])
+        self.assertEqual(reverted["revert_boundaries"][0]["op"], "REVERT")
+
+        pinned_block = int(rpc_call(endpoint, "eth_blockNumber"), 16)
+        surface_root = Path(self.temporary.name) / "surface-campaign"
+        init_campaign(
+            surface_root,
+            label="surface-test",
+            source=self.source,
+            target="TraceFixture",
+            chain_id=1,
+            block_number=pinned_block,
+            rpc_env="A1X_TEST_RPC_URL",
+            authorization="local synthetic test",
+            budgets={"max_runs": 20, "max_scale_lanes": 20, "max_parallel": 2, "default_run_timeout_seconds": 60, "default_output_bytes": 100000},
+        )
+        surface = build_surface_graph(
+            surface_root,
+            {
+                "contracts": [{
+                    "label": "TransientFixture",
+                    "address": transient_address,
+                    "kind": "test-contract",
+                    "source_paths": ["Target.sol"],
+                }],
+                "dependencies": [],
+                "probes": [],
+                "capital_primitives": [],
+            },
+        )
+        self.assertTrue(surface["fork_observations"][0]["has_code"])
+        self.assertEqual(surface["block_number"], pinned_block)
+
+    def test_real_foundry_oracle_evaluation(self) -> None:
+        contracts = self.source / "contracts"
+        tests = self.source / "test"
+        contracts.mkdir()
+        tests.mkdir()
+        (contracts / "Fixture.sol").write_text("pragma solidity ^0.8.24; contract Fixture {}\n", encoding="utf-8")
+        (tests / "OracleFixture.t.sol").write_text(
+            "pragma solidity ^0.8.24; contract OracleFixtureTest { function testSolvencyMetrics() public pure { uint256 assets = 100; uint256 liabilities = 101; require(liabilities > assets); } }\n",
+            encoding="utf-8",
+        )
+        config = self.source / "foundry.toml"
+        config.write_text('[profile.default]\nsrc = "contracts"\ntest = "test"\nout = "out"\ncache_path = "cache"\n', encoding="utf-8")
+        obligation = add_obligation(
+            self.root,
+            title="solvency",
+            statement="assets cover liabilities",
+            boundary="post transaction",
+            units="base",
+            oracle="liabilities <= assets",
+        )
+        hypothesis = add_hypothesis(
+            self.root,
+            obligation_id=obligation["id"],
+            mechanism="liabilities can exceed assets",
+            sequence="execute fixture",
+            support_prediction="Foundry fixture establishes measured inequality",
+            refute_prediction="fixture does not execute",
+            next_action="evaluate oracle",
+        )
+        planned = plan_run(
+            self.root,
+            hypothesis_id=hypothesis["id"],
+            run_class="candidate",
+            cwd=self.source,
+            argv=["forge", "test", "--match-test", "testSolvencyMetrics"],
+            timeout_seconds=60,
+            max_output_bytes=2_000_000,
+            inputs=[config, contracts, tests],
+            property_statement="liabilities exceed assets in the declared fixture",
+            support_prediction="Foundry test passes",
+            refute_prediction="Foundry test fails",
+            success_regex="1 passed",
+            pass_env=[],
+            inherit_env=[],
+            fork_id=None,
+        )
+        run_id = planned["run_id"]
+        receipt = execute_run(self.root, run_id)
+        self.assertTrue(receipt["mechanical_success"])
+        observe_run(
+            self.root,
+            run_id,
+            outcome="supports",
+            property_violated=True,
+            observation="Foundry executed the declared solvency comparison",
+            impact="fixture only",
+            metrics=[{"name": "assets", "value": "100", "unit": "base"}, {"name": "liabilities", "value": "101", "unit": "base"}],
+            limitations="synthetic oracle integration fixture",
+        )
+        definition = standard_oracle_profile("solvency")
+        definition.update({
+            "actor_model": "synthetic protocol accounting",
+            "limitations": "fixture validates runtime wiring, not a production claim",
+            "valuation": None,
+        })
+        oracle = create_security_oracle(self.root, definition)
+        evaluated = evaluate_security_oracle(
+            self.root,
+            oracle_id=oracle["id"],
+            run_id=run_id,
+            observations={"assets": "100", "liabilities": "101"},
+            evidence_refs=[{"type": "run-receipt", "run_id": run_id, "outcome": "supports"}],
+        )
+        self.assertTrue(evaluated["property_violated"])
+        self.assertTrue(verify_oracle_evaluation(self.root, evaluated["id"])["valid"])
 
     def test_scale_lane_receives_tools_wake_mcp_and_no_upstream_secret(self) -> None:
         capabilities = self.root / "capabilities" / "capabilities.json"

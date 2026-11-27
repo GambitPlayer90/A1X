@@ -40,6 +40,9 @@ from .records import verify_event_chain
 from .rsa import build_compatibility_graph, create_evidence_round
 from .runs import execute_run, observe_run, plan_run
 from .scale import aggregate_round, auto_select_frontier, create_recombination_round, create_round, evolve_population, run_round, select_frontier
+from .security_oracles import create_security_oracle, evaluate_security_oracle, standard_oracle_profile, verify_oracle_evaluation
+from .surface_graph import build_surface_graph
+from .trace_facts import analyze_run_trace
 
 
 def _root(value: str) -> Path:
@@ -260,6 +263,44 @@ def build_parser() -> argparse.ArgumentParser:
     continuation_attempt.add_argument("--continuation", required=True)
     continuation_attempt.add_argument("--json", required=True, type=_root)
     continuation_attempt.set_defaults(handler=lambda a: record_continuation_attempt(a.root, a.continuation, _load_json(a.json)))
+
+    trace = commands.add_parser("trace", help="extract deterministic facts from EVM traces")
+    trace_sub = trace.add_subparsers(dest="trace_command", required=True)
+    trace_analyze = trace_sub.add_parser("analyze")
+    trace_analyze.add_argument("--root", required=True, type=_root)
+    trace_analyze.add_argument("--run", required=True)
+    trace_analyze.add_argument("--path", required=True)
+    trace_analyze.add_argument("--metrics", type=_root)
+    trace_analyze.set_defaults(handler=lambda a: analyze_run_trace(a.root, run_id=a.run, path=a.path, declared_metrics=_load_json(a.metrics) if a.metrics else []))
+
+    surface = commands.add_parser("surface", help="build a bounded cross-contract and pinned-fork graph")
+    surface_sub = surface.add_subparsers(dest="surface_command", required=True)
+    surface_build = surface_sub.add_parser("build")
+    surface_build.add_argument("--root", required=True, type=_root)
+    surface_build.add_argument("--json", required=True, type=_root)
+    surface_build.set_defaults(handler=lambda a: build_surface_graph(a.root, _load_json(a.json)))
+
+    oracle = commands.add_parser("oracle", help="define and evaluate protocol security properties")
+    oracle_sub = oracle.add_subparsers(dest="oracle_command", required=True)
+    oracle_profile = oracle_sub.add_parser("profile")
+    oracle_profile.add_argument("--name", required=True)
+    oracle_profile.set_defaults(handler=lambda a: standard_oracle_profile(a.name))
+    oracle_create = oracle_sub.add_parser("create")
+    oracle_create.add_argument("--root", required=True, type=_root)
+    oracle_create.add_argument("--json", required=True, type=_root)
+    oracle_create.set_defaults(handler=lambda a: create_security_oracle(a.root, _load_json(a.json)))
+    oracle_evaluate = oracle_sub.add_parser("evaluate")
+    oracle_evaluate.add_argument("--root", required=True, type=_root)
+    oracle_evaluate.add_argument("--oracle", required=True)
+    oracle_evaluate.add_argument("--run", required=True)
+    oracle_evaluate.add_argument("--control-run")
+    oracle_evaluate.add_argument("--observations", required=True, type=_root)
+    oracle_evaluate.add_argument("--evidence-ref", action="append", default=[])
+    oracle_evaluate.set_defaults(handler=lambda a: evaluate_security_oracle(a.root, oracle_id=a.oracle, run_id=a.run, control_run=a.control_run, observations=_load_json(a.observations), evidence_refs=_evidence_refs(a.evidence_ref)))
+    oracle_verify = oracle_sub.add_parser("verify")
+    oracle_verify.add_argument("--root", required=True, type=_root)
+    oracle_verify.add_argument("--evaluation", required=True)
+    oracle_verify.set_defaults(handler=lambda a: verify_oracle_evaluation(a.root, a.evaluation))
 
     recon = commands.add_parser("recon", help="manage immutable versioned Recon Packs")
     recon_sub = recon.add_subparsers(dest="recon_command", required=True)
