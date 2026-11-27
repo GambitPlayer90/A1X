@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X modern EVM execution context",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "chain_id": {"type": "integer", "minimum": 1},
+    "block_number": {"type": "integer", "minimum": 0},
+    "block_hash": {"type": ["string", "null"]},
+    "evm_revision": {"type": "string"},
+    "transaction": {"type": "object"},
+    "eip7702": {"type": ["object", "null"]},
+    "eip1153": {"type": ["object", "null"]}
+  },
+  "required": ["chain_id", "block_number", "evm_revision", "transaction"]
+}

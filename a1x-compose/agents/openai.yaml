@@ -1,0 +1,6 @@
+interface:
+  display_name: "A1X Compose"
+  short_description: "Compose reachable multi-actor and multi-transaction attack paths"
+  default_prompt: "Compose the shortest reachable adversarial state transitions for the selected hypothesis."
+policy:
+  allow_implicit_invocation: false

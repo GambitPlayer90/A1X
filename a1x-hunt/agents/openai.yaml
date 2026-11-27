@@ -1,0 +1,4 @@
+interface:
+  display_name: "A1X Hunt"
+  short_description: "Run a scaled adversarial smart contract investigation"
+  default_prompt: "Run the complete current A1X investigation, including mandatory blind lanes, impact propagation, recursive aggregation where grounded, replay, and the campaign completion gate."

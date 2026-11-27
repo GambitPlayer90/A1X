@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X lane handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "lane_id": {"type": "string", "pattern": "^LANE-[0-9]{4,}$"},
+    "status": {"type": "string", "enum": ["candidate", "near-miss", "refuted", "blocked"]},
+    "mechanism": {"type": "string"},
+    "mechanism_family": {"type": "string"},
+    "consumer": {"type": "string"},
+    "tested_obligation": {"type": "string"},
+    "discriminator": {"type": "string"},
+    "causal_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "writer": {"type": "string"},
+        "guard": {"type": "string"},
+        "consumer": {"type": "string"},
+        "state": {"type": "string"},
+        "property": {"type": "string"}
+      },
+      "required": ["writer", "guard", "consumer", "state", "property"]
+    },
+    "causal_anchors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "writer": {"type": "string"},
+        "guard": {"type": "string"},
+        "consumer": {"type": "string"},
+        "state": {"type": "string"},
+        "property": {"type": "string"},
+        "attacker_model": {"type": "string"},
+        "state_shape": {"type": "string"},
+        "transition_sequence": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "deployment": {"type": "string"}
+      },
+      "required": ["writer", "guard", "consumer", "state", "property", "attacker_model", "state_shape", "transition_sequence", "deployment"]
+    },
+    "attacker_fingerprint": {"type": "string"},
+    "state_fingerprint": {"type": "string"},
+    "impact_stage": {"type": "string", "enum": ["primitive", "consumer", "terminal", "bounded"]},
+    "terminal_impact": {"type": "boolean"},
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ran": {"type": "boolean"},
+        "property": {"type": "string"},
+        "property_violated": {"type": ["boolean", "null"]},
+        "outcome": {"type": "string"},
+        "command_artifact": {"type": "string"},
+        "control_artifact": {"type": "string"}
+      },
+      "required": ["ran", "property", "property_violated", "outcome", "command_artifact", "control_artifact"]
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prerequisite": {"type": "string"},
+        "resolution_condition": {"type": "string"},
+        "evidence_artifact": {"type": "string"}
+      },
+      "required": ["prerequisite", "resolution_condition", "evidence_artifact"]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "claim": {"type": "string"},
+          "observation": {"type": "string"},
+          "artifact": {"type": "string"}
+        },
+        "required": ["claim", "observation", "artifact"]
+      }
+    },
+    "artifacts": {"type": "array", "items": {"type": "string"}},
+    "refutations": {"type": "array", "items": {"type": "string"}},
+    "unresolved": {"type": "array", "items": {"type": "string"}},
+    "prerequisites": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "description": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "enum": ["capital", "state", "authority", "timing", "numeric", "deployment", "environment", "settlement", "other"]},
+          "status": {"type": "string", "enum": ["open", "narrowed", "blocked", "resolved", "refuted"]},
+          "resolution_condition": {"type": "string", "minLength": 1},
+          "evidence_artifact": {"type": "string"}
+        },
+        "required": ["id", "description", "kind", "status", "resolution_condition", "evidence_artifact"]
+      }
+    },
+    "witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bug_class": {"type": "string", "enum": ["economic", "settlement", "authorization", "governance", "upgrade", "liveness", "other"]},
+        "source_faithful": {"type": "boolean"},
+        "setup_taint": {"type": "string", "enum": ["none", "setup-only", "attack-path", "unknown"]},
+        "phases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string"},
+              "status": {"type": "string", "enum": ["not-applicable", "open", "blocked", "reached", "demonstrated", "refuted"]},
+              "property": {"type": "string"},
+              "evidence_artifact": {"type": "string"}
+            },
+            "required": ["id", "status", "property", "evidence_artifact"]
+          }
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {"type": "string", "enum": ["invariant-drift", "share-rate-drift", "internal-credit", "custody-loss", "attacker-net", "authorization-crossed", "governance-control", "upgrade-control", "liveness-blocked", "settlement-failure", "other"]},
+              "value": {"type": "string", "minLength": 1},
+              "unit": {"type": "string", "minLength": 1},
+              "evidence_artifact": {"type": "string", "minLength": 1}
+            },
+            "required": ["kind", "value", "unit", "evidence_artifact"]
+          }
+        }
+      },
+      "required": ["bug_class", "source_faithful", "setup_taint", "phases", "signals"]
+    },
+    "next_action": {"type": "string"},
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "evidence_level": {"type": "string", "enum": ["E0", "E1", "E2", "E3", "E4", "E5", "E6"]},
+        "reachability": {"type": "string", "enum": ["unknown", "low", "medium", "high"]},
+        "security_consequence": {"type": "string", "enum": ["unknown", "low", "medium", "high"]},
+        "state_novelty": {"type": "string", "enum": ["unknown", "low", "medium", "high"]},
+        "next_test_cost": {"type": "string", "enum": ["unknown", "low", "medium", "high"]}
+      },
+      "required": ["evidence_level", "reachability", "security_consequence", "state_novelty", "next_test_cost"]
+    }
+  },
+  "required": ["lane_id", "status", "mechanism", "mechanism_family", "consumer", "tested_obligation", "discriminator", "causal_identity", "causal_anchors", "attacker_fingerprint", "state_fingerprint", "impact_stage", "terminal_impact", "execution", "blocker", "evidence", "artifacts", "refutations", "prerequisites", "witness", "next_action", "dimensions"]
+}

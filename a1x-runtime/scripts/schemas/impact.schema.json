@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X impact branch",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"enum": ["a1x.runtime/v1", "a1x.runtime/v2"]},
+    "kind": {"const": "impact-branch"},
+    "id": {"type": "string", "pattern": "^IMPACT-[0-9]{4,}$"},
+    "created_at": {"type": "string"},
+    "resolved_at": {"type": "string"},
+    "candidate_id": {"type": "string"},
+    "capability": {"type": "string"},
+    "sink": {"type": "string"},
+    "consequence": {"type": "string"},
+    "impact_property": {"type": "string"},
+    "status": {"enum": ["open", "demonstrated", "refuted", "blocked"]},
+    "requested_status": {"type": ["string", "null"]},
+    "promotion_status": {"enum": ["not-applicable", "satisfied", "deferred"]},
+    "promotion_blocker": {"type": ["string", "null"]},
+    "impact_control": {"type": ["object", "null"]},
+    "evidence_refs": {"type": "array", "minItems": 1, "items": {"$ref": "evidence-ref.schema.json"}},
+    "next_action": {"type": "string"},
+    "high_consequence": {"type": "boolean"},
+    "low_cost": {"type": "boolean"},
+    "blocker_kind": {"type": ["string", "null"]},
+    "resolution_condition": {"type": "string"}
+  },
+  "required": ["schema", "kind", "id", "created_at", "candidate_id", "capability", "sink", "consequence", "impact_property", "status", "requested_status", "promotion_status", "promotion_blocker", "impact_control", "evidence_refs", "next_action", "high_consequence", "low_cost", "blocker_kind", "resolution_condition"]
+}

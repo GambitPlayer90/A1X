@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X run receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"enum": ["a1x.runtime/v1", "a1x.runtime/v2"]},
+    "kind": {"const": "run-receipt"},
+    "run_id": {"type": "string", "pattern": "^RUN-[0-9]{4,}$"},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "input_checks": {"type": "array", "items": {"type": "object"}},
+    "process": {"type": "object"},
+    "success_regex_matched": {"type": ["boolean", "null"]},
+    "mechanical_success": {"type": "boolean"},
+    "semantic_result": {"enum": ["unreviewed", "supports", "refutes", "inconclusive"]}
+  },
+  "required": ["schema", "kind", "run_id", "plan_sha256", "input_checks", "process", "success_regex_matched", "mechanical_success", "semantic_result"]
+}

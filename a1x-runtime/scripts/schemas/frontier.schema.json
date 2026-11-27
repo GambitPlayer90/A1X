@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X research frontier item",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"enum": ["a1x.runtime/v1", "a1x.runtime/v2"]},
+    "kind": {"const": "frontier-item"},
+    "id": {"type": "string", "pattern": "^FRONTIER-[0-9]{4,}$"},
+    "created_at": {"type": "string"},
+    "resolved_at": {"type": "string"},
+    "candidate_id": {"type": ["string", "null"]},
+    "frontier_kind": {"type": "string"},
+    "statement": {"type": "string"},
+    "grounding_refs": {"type": "array", "minItems": 1, "items": {"$ref": "evidence-ref.schema.json"}},
+    "next_action": {"type": "string"},
+    "priority": {"enum": ["low", "medium", "high"]},
+    "cost": {"enum": ["low", "medium", "high"]},
+    "status": {"enum": ["open", "demonstrated", "refuted", "blocked", "superseded"]},
+    "evidence_refs": {"type": "array", "items": {"$ref": "evidence-ref.schema.json"}},
+    "scale_round": {"type": "string"},
+    "scale_status": {"enum": ["not-required", "allocated", "blocked"]},
+    "scale_blocker": {"type": ["string", "null"]},
+    "scale_blocker_kind": {"enum": ["budget", "tooling", null]},
+    "blocker_kind": {"type": ["string", "null"]},
+    "resolution_condition": {"type": "string"}
+  },
+  "required": ["schema", "kind", "id", "created_at", "candidate_id", "frontier_kind", "statement", "grounding_refs", "next_action", "priority", "cost", "status", "evidence_refs", "scale_status", "scale_blocker", "scale_blocker_kind"]
+}

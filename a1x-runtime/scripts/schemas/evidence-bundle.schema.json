@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X v4 EvidenceBundle",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema": {"const": "a1x.runtime/v2"},
+    "kind": {"const": "evidence-bundle"},
+    "id": {"type": "string", "pattern": "^EVIDENCE-[0-9]{4,}$"},
+    "payload_type": {"enum": ["transaction-witness", "state-prefix", "coverage-gap", "solver-constraint", "unreachability-evidence", "recon-fact", "failed-experiment", "oracle-definition", "semantic-waypoint", "impact-extension"]},
+    "observation": {"type": "string", "minLength": 1},
+    "interpretation": {"type": "string", "minLength": 1},
+    "evidence_level": {"enum": ["E0", "E1", "E2", "E3", "E4", "E5", "E6"]},
+    "payload": {"type": "object", "minProperties": 1},
+    "artifact_ids": {"type": "array", "items": {"type": "string"}},
+    "execution_context": {"type": ["object", "null"]},
+    "resource_budget": {"type": "object", "minProperties": 1},
+    "candidate_id": {"type": "string", "pattern": "^CAND-[0-9]{4,}$"},
+    "replay_id": {"type": "string", "pattern": "^REPLAY-[0-9]{4,}$"},
+    "blind_review_id": {"type": "string", "pattern": "^BLIND-[0-9]{4,}$"},
+    "bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "required": ["schema", "kind", "id", "payload_type", "observation", "interpretation", "evidence_level", "payload", "artifact_ids", "resource_budget", "bundle_sha256"],
+  "allOf": [
+    {
+      "if": {"properties": {"evidence_level": {"const": "E6"}}, "required": ["evidence_level"]},
+      "then": {
+        "properties": {"payload_type": {"const": "impact-extension"}},
+        "required": ["candidate_id", "replay_id", "blind_review_id"]
+      }
+    }
+  ]
+}

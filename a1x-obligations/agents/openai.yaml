@@ -1,0 +1,6 @@
+interface:
+  display_name: "A1X Obligations"
+  short_description: "Derive protocol obligations and high-value security properties"
+  default_prompt: "Derive protocol-specific obligations and turn them into falsifiable vulnerability hypotheses."
+policy:
+  allow_implicit_invocation: false

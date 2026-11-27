@@ -1,0 +1,6 @@
+interface:
+  display_name: "A1X Solve"
+  short_description: "Solve numeric, symbolic, and discrete exploit constraints"
+  default_prompt: "Resolve the selected exploit constraint with the narrowest suitable computational method."
+policy:
+  allow_implicit_invocation: false

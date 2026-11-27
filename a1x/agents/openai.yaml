@@ -1,0 +1,4 @@
+interface:
+  display_name: "A1X"
+  short_description: "Compatibility entry for the current A1X hunt"
+  default_prompt: "Route this authorized smart contract investigation through the complete current $a1x-hunt workflow."

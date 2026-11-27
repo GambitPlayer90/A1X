@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X host-side explorer retrieval",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema": {"const": "a1x.runtime/v2"},
+    "kind": {"const": "explorer-retrieval"},
+    "id": {"type": "string", "pattern": "^RET-[0-9]{4,}$"},
+    "campaign_epoch": {"type": "integer", "minimum": 1},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "provider": {"const": "etherscan-v2"},
+    "api_env": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
+    "chain_id": {"type": "integer", "minimum": 1},
+    "block_number": {"type": ["integer", "null"], "minimum": 0},
+    "address": {"type": "string", "pattern": "^0x[0-9a-f]{40}$"},
+    "artifact_id": {"type": "string", "pattern": "^ART-[0-9]{4,}$"},
+    "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "recon_version": {"type": "string", "pattern": "^v[0-9]{4}$"},
+    "upstream_secret_exposed": {"const": false}
+  },
+  "required": ["schema", "kind", "id", "campaign_epoch", "idempotency_key", "provider", "api_env", "chain_id", "address", "artifact_id", "artifact_sha256", "recon_version", "upstream_secret_exposed"]
+}

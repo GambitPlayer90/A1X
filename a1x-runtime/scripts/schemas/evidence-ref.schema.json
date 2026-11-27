@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evidence-ref.schema.json",
+  "title": "A1X resolved evidence reference",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "run-receipt"},
+        "run_id": {"type": "string", "pattern": "^RUN-[0-9]{4,}$"},
+        "receipt_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "observation_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "outcome": {"type": ["string", "null"]},
+        "property_violated": {"type": ["boolean", "null"]}
+      },
+      "required": ["type", "run_id", "receipt_sha256", "observation_sha256", "outcome", "property_violated"]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "replay"},
+        "replay_id": {"type": "string", "pattern": "^REPLAY-[0-9]{4,}$"},
+        "run_id": {"type": "string", "pattern": "^RUN-[0-9]{4,}$"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "passed": {"const": true}
+      },
+      "required": ["type", "replay_id", "run_id", "sha256", "passed"]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "fork-snapshot"},
+        "fork_id": {"type": "string", "pattern": "^FORK-[0-9]{4,}$"},
+        "snapshot_id": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "required": ["type", "fork_id", "snapshot_id", "sha256"]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "source-anchor"},
+        "anchor": {"enum": ["source", "campaign"]},
+        "path": {"type": "string"},
+        "line_start": {"type": ["integer", "null"], "minimum": 1},
+        "line_end": {"type": ["integer", "null"], "minimum": 1},
+        "digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"enum": ["file", "directory"]},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "files": {"type": "integer", "minimum": 0},
+            "bytes": {"type": "integer", "minimum": 0}
+          },
+          "required": ["kind", "sha256", "files", "bytes"]
+        }
+      },
+      "required": ["type", "anchor", "path", "line_start", "line_end", "digest"]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["trace-artifact", "state-diff", "solver-witness"]},
+        "run_id": {"type": "string", "pattern": "^RUN-[0-9]{4,}$"},
+        "path": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "required": ["type", "run_id", "path", "sha256"]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "deployment-observation"},
+        "run_id": {"type": "string", "pattern": "^RUN-[0-9]{4,}$"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "outcome": {"type": ["string", "null"]},
+        "property_violated": {"type": ["boolean", "null"]}
+      },
+      "required": ["type", "run_id", "sha256", "outcome", "property_violated"]
+    }
+  ]
+}

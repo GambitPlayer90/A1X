@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X credential-free local fork record",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema": {"const": "a1x.runtime/v2"},
+    "kind": {"const": "fork"},
+    "id": {"type": "string", "pattern": "^FORK-[0-9]{4,}$"},
+    "status": {"enum": ["running", "stopped"]},
+    "rpc_env": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
+    "chain_id": {"type": "integer", "minimum": 1},
+    "block_number": {"type": "integer", "minimum": 0},
+    "block_hash": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
+    "socket": {"type": "string", "minLength": 1},
+    "upstream_secret_exposed": {"const": false},
+    "rpc_policy": {"const": "credential-free-filtered-writable-local-fork"},
+    "scope": {"enum": ["manual", "lane"]},
+    "snapshots": {"type": "array"}
+  },
+  "required": ["schema", "kind", "id", "status", "rpc_env", "chain_id", "block_number", "block_hash", "socket", "upstream_secret_exposed", "rpc_policy", "scope", "snapshots"]
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "A1X Scale"
+  short_description: "Run test-time scaling and recursive aggregation"
+  default_prompt: "Run the required independent population or evolve grounded vulnerability components with execution-verified RSA while preserving fresh search diversity."
+policy:
+  allow_implicit_invocation: false

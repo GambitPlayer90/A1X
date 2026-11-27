@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"enum": ["a1x.runtime/v1", "a1x.runtime/v2"]},
+    "kind": {"const": "candidate"},
+    "id": {"type": "string", "pattern": "^CAND-[0-9]{4,}$"},
+    "created_at": {"type": "string"},
+    "validated_at": {"type": "string"},
+    "hypothesis_id": {"type": "string"},
+    "support_run": {"type": "string"},
+    "control_run": {"type": ["string", "null"]},
+    "replay_id": {"type": ["string", "null"]},
+    "root_cause": {"type": "string"},
+    "code_evidence": {"type": "string"},
+    "reachability": {"type": "string"},
+    "property": {"type": "string"},
+    "impact": {"type": "string"},
+    "consequence_class": {"type": "string"},
+    "terminal_impact": {"type": "boolean"},
+    "expansion_round": {"type": ["string", "null"]},
+    "expansion_status": {"enum": ["pending", "allocated", "blocked"]},
+    "expansion_blocker": {"type": ["string", "null"]},
+    "expansion_blocker_kind": {"enum": ["budget", "tooling", null]},
+    "fidelity": {"type": "object"},
+    "reviews": {"type": "array", "items": {"type": "string"}},
+    "status": {"enum": ["candidate", "validated"]}
+  },
+  "required": ["schema", "kind", "id", "created_at", "hypothesis_id", "support_run", "control_run", "replay_id", "root_cause", "code_evidence", "reachability", "property", "impact", "consequence_class", "terminal_impact", "expansion_round", "expansion_status", "expansion_blocker", "expansion_blocker_kind", "fidelity", "reviews", "status"]
+}

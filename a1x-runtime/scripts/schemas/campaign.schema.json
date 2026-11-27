@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A1X campaign",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"enum": ["a1x.runtime/v1", "a1x.runtime/v2"]},
+    "kind": {"const": "campaign"},
+    "runtime_version": {"type": "string"},
+    "label": {"type": "string"},
+    "target": {"type": "string"},
+    "authorization": {"type": "string"},
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "source": {"type": "object"},
+    "chain": {"type": "object"},
+    "budgets": {"type": "object"},
+    "research_counters": {"type": "object"}
+  },
+  "required": ["schema", "kind", "runtime_version", "label", "target", "authorization", "created_at", "updated_at", "source", "chain", "budgets", "research_counters"]
+}

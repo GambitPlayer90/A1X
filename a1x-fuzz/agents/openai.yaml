@@ -1,0 +1,6 @@
+interface:
+  display_name: "A1X Fuzz"
+  short_description: "Route and run focused stateful smart contract fuzzing"
+  default_prompt: "Use Wake, Foundry, Echidna, Medusa, or a compatible specialist backend to resolve a specific protocol obligation or attack-path question, preserving typed evidence and Foundry replay."
+policy:
+  allow_implicit_invocation: false
