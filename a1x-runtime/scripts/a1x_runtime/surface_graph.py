@@ -31,6 +31,16 @@ STANDARD_PROBES = {
     "totalSupply": ("0x18160ddd", "uint"),
     "asset": ("0x38d52e0f", "address"),
     "totalAssets": ("0x01e1d114", "uint"),
+    "permitNonceZero": ("0x7ecebe00" + "00" * 32, "uint"),
+    "domainSeparator": ("0x3644e515", "bytes32"),
+    "paused": ("0x5c975abb", "uint"),
+    "latestRoundData": ("0xfeaf968c", "raw"),
+    "latestAnswer": ("0x50d25bcd", "uint"),
+    "latestTimestamp": ("0x8205bf6a", "uint"),
+    "convertOneAssetToShares": ("0xc6e6f592" + "0" * 63 + "1", "uint"),
+    "convertOneShareToAssets": ("0x07a2d13a" + "0" * 63 + "1", "uint"),
+    "maxWithdrawZero": ("0xce96cb77" + "00" * 32, "uint"),
+    "getReserves": ("0x0902f1ac", "raw"),
 }
 
 
@@ -250,6 +260,38 @@ def build_surface_graph(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         for observation in rpc_observations
         for probe in observation["probes"]
     }
+    ecosystem_traits = []
+    for observation in rpc_observations:
+        probe_map = {item["name"]: item for item in observation["probes"]}
+        kind = str(observation.get("kind", "unknown")).lower()
+        traits = []
+        if any(token in kind for token in ("token", "erc20", "erc-20", "vault", "erc4626", "erc-4626")):
+            traits.extend([
+                {"trait": "permit", "status": "observed" if probe_map.get("permitNonceZero", {}).get("status") == "observed" and probe_map.get("domainSeparator", {}).get("status") == "observed" else "unknown", "basis": "read-only interface probes"},
+                {"trait": "pausable", "status": "observed" if probe_map.get("paused", {}).get("status") == "observed" else "unknown", "basis": "read-only interface probe"},
+                {"trait": "erc4626-conversion", "status": "observed" if probe_map.get("convertOneAssetToShares", {}).get("status") == "observed" and probe_map.get("convertOneShareToAssets", {}).get("status") == "observed" else "unknown", "basis": "one-unit conversion probes"},
+                {"trait": "fee-on-transfer", "status": "unknown", "basis": "requires an executable balance-delta probe"},
+                {"trait": "rebasing", "status": "unknown", "basis": "requires observations across a state transition"},
+                {"trait": "token-hooks", "status": "unknown", "basis": "requires bytecode/call-trace inspection or an executable transfer probe"},
+                {"trait": "approval-quirks", "status": "unknown", "basis": "requires an executable approval state machine"},
+                {"trait": "blacklist-or-transfer-policy", "status": "unknown", "basis": "requires source or executable actor probes"},
+            ])
+        if any(token in kind for token in ("oracle", "feed", "price")):
+            traits.extend([
+                {"trait": "round-data", "status": "observed" if probe_map.get("latestRoundData", {}).get("status") == "observed" else "unknown", "basis": "pinned latestRoundData probe"},
+                {"trait": "staleness-timestamp", "status": "observed" if probe_map.get("latestTimestamp", {}).get("status") == "observed" or probe_map.get("latestRoundData", {}).get("status") == "observed" else "unknown", "basis": "pinned timestamp-bearing probe"},
+                {"trait": "l2-sequencer-guard", "status": "unknown", "basis": "requires consumer-path source and deployment analysis"},
+                {"trait": "spot-vs-twap", "status": "unknown", "basis": "requires semantic source and dependency analysis"},
+            ])
+        if any(token in kind for token in ("pool", "amm", "dex")):
+            traits.extend([
+                {"trait": "reserve-interface", "status": "observed" if probe_map.get("getReserves", {}).get("status") == "observed" else "unknown", "basis": "pinned getReserves probe"},
+                {"trait": "callback-or-hook-window", "status": "unknown", "basis": "requires executed call-trace analysis"},
+            ])
+        ecosystem_traits.append({"contract": observation["label"], "traits": traits})
+        for trait in traits:
+            if trait["status"] == "unknown":
+                unknowns.append({"kind": "ecosystem-trait", "contract": observation["label"], "question": f"resolve {trait['trait']}: {trait['basis']}"})
     capital_primitives = []
     for raw in payload.get("capital_primitives", []):
         if not isinstance(raw, dict):
@@ -295,6 +337,7 @@ def build_surface_graph(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         "fork_observations": rpc_observations,
         "dependencies": dependencies,
         "capital_primitives": capital_primitives,
+        "ecosystem_traits": ecosystem_traits,
         "unknowns": unknowns,
         "completeness": "bounded to supplied contracts, source paths, probes, and the pinned block",
     }

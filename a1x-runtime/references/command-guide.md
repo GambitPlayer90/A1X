@@ -4,6 +4,7 @@
 
 - Doctor and campaign
 - Typed evidence, recon, and backend capabilities
+- Continuity, composition, harness, and progress records
 - Obligations and hypotheses
 - Sealed execution
 - Fork lifecycle
@@ -43,6 +44,39 @@ Set `A1X_CLI` to this skill's absolute `scripts/a1x` path and `A1X_ROOT` to the 
 ```
 
 Generated recon remains outside the source tree. EvidenceBundle JSON separates observation from interpretation and records target hash, backend/version, budget, execution context, and immutable artifact IDs. Use `rsa graph` to plan cross-backend composition.
+
+## Continuity, composition, harness, and progress records
+
+Complex payloads are supplied as JSON so their exact actor, predicate, transaction, and evidence structure is reviewable before mutation:
+
+```bash
+"$A1X_CLI" surface build --root "$A1X_ROOT" --json surface.json
+"$A1X_CLI" trace analyze --root "$A1X_ROOT" --run RUN-0001 \
+  --path stdout.log --metrics trace-metrics.json
+
+"$A1X_CLI" continuation create --root "$A1X_ROOT" --json continuation.json
+"$A1X_CLI" continuation attempt --root "$A1X_ROOT" \
+  --continuation CONT-0001 --json continuation-attempt.json
+"$A1X_CLI" prerequisite create --root "$A1X_ROOT" --json prerequisite-graph.json
+"$A1X_CLI" component create --root "$A1X_ROOT" --json component-a.json
+"$A1X_CLI" component compose --root "$A1X_ROOT" --json composition.json
+"$A1X_CLI" actors create --root "$A1X_ROOT" --json actor-program.json
+
+"$A1X_CLI" harness create --root "$A1X_ROOT" --json harness-surface.json
+"$A1X_CLI" harness telemetry --root "$A1X_ROOT" --harness HARNESS-0001 \
+  --run RUN-0002 --replay REPLAY-0002 --action-stats action-stats.json \
+  --state-fingerprint reached-state-A \
+  --evidence-ref '{"type":"run-receipt","run_id":"RUN-0002","outcome":"supports"}' \
+  --evidence-ref '{"type":"replay","replay_id":"REPLAY-0002"}'
+
+"$A1X_CLI" progress record --root "$A1X_ROOT" --json progress.json
+"$A1X_CLI" scheduling show --root "$A1X_ROOT"
+"$A1X_CLI" scheduling resources --root "$A1X_ROOT"
+```
+
+A non-operational continuation outcome needs two separate replay relationships: `replay_id` reproduces the parent run, while `extension_run_id` and `extension_replay_id` prove the distinct observed extension. A nested composition names a transaction waypoint continuation and replays the complete top-level transaction. A temporal composition names the exact time/block/epoch/keeper transition. A harness model explicitly covers state writers, valuable consumers, callbacks, actor capabilities, lifecycle transitions, and numeric boundaries; missing and unknown entries automatically become bounded expansion tasks.
+
+Direct exact-integer and isolated-Z3 jobs use `solver create`. Installed external fuzzers/solvers are registered only from a sealed run with a solver-witness artifact, then concretely validated and replayed. Version presence alone is insufficient.
 
 ## Obligations and hypotheses
 
@@ -184,7 +218,7 @@ Candidate creation also creates a mandatory four-lane expansion round. Run it ev
   --rationale "distinct mechanisms with the strongest executed evidence" \
   --drop "LANE-0002:exact artifact-bound duplicate of LANE-0001"
 "$A1X_CLI" scale evolve --root "$A1X_ROOT" --parent-round ROUND-0001 \
-  --generations 3 --children 3 --closure-lanes 1 --fresh-lanes 1 --stagnation-rounds 2 --parallel 4 \
+  --generations 3 --adaptive-extra-generations 3 --children 3 --closure-lanes 1 --fresh-lanes 1 --stagnation-rounds 2 --parallel 4 \
   --lane-forks auto
 ```
 
@@ -254,4 +288,6 @@ Accepted evidence-reference types are `run-receipt`, `replay`, `fork-snapshot`, 
 
 For a blocked branch, add `--blocker-kind budget|environment|external-prerequisite|tooling` and a non-empty `--resolution-condition`. Adding a grounded high-priority frontier with low or medium test cost automatically creates direct-discriminator, alternate-branch, and strongest-refutation lanes. Allocation failure preserves the frontier/candidate and records the failure; it never erases the research record.
 
-The close command fails when mandatory TTS, candidate extension, impact propagation, RSA, coverage, or cheap-frontier work remains. When only evidenced blockers remain, select the matching explicit closure: `budget-exhausted`, `environment-blocked`, or `open-risk`. A `clean` close succeeds only for `READY_CLEAN`.
+The close command fails when mandatory TTS, candidate extension, impact propagation, RSA, coverage, cheap-frontier work, or automatically swept continuation/prerequisite/harness/composition state remains. When only evidenced blockers remain, select the matching explicit closure: `budget-exhausted`, `environment-blocked`, or `open-risk`. A `clean` close succeeds only for `READY_CLEAN`.
+
+For ablation and regression work, create an equal-budget suite with `benchmark create`, attach independently adjudicated `TRIAL-*` records with `benchmark attach`, then run `benchmark compare`. The required configurations are the frozen v4.3.0 commit, v4.4.0 integrity/continuity fixes, and the full v4.4.0 profile. Every incident uses the same declared resource envelope and held model, target information, tools, chain/block, and attacker model.

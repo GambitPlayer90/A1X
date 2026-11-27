@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from .atomic import exclusive_lock, read_json, write_json_atomic, write_text_atomic
+from .completion_sweep import sweep_research_state
 from .errors import A1XError, BudgetError, IntegrityError, ValidationError
 from .evidence import has_demonstration_pair, has_refuting_evidence, has_strong_refuting_evidence, impact_control_pair, normalize_evidence_refs, verify_evidence_refs
 from .records import allocate_id, event, require_campaign, schema_for, utc_now
+from .scheduling import resource_snapshot
 
 
 BOOTSTRAP_AXES = [
@@ -457,6 +459,13 @@ def assess_completion(root: Path) -> dict[str, Any]:
     require_campaign(root)
     blockers: list[dict[str, str]] = []
     open_risks: list[dict[str, str]] = []
+    sweep = sweep_research_state(root)
+    for item in sweep.get("invalid", []):
+        blockers.append({"gate": "RESEARCH-INTEGRITY", "reason": f"{item['source']}: {item['reason']}"})
+    for item in sweep.get("open", []):
+        blockers.append({"gate": "RESEARCH-CONTINUITY", "reason": f"{item['source']}: {item['reason']} (next: {item['next_action']})"})
+    for item in sweep.get("risks", []):
+        open_risks.append({"kind": item["kind"], "record": item["source"], "reason": item["reason"]})
     rounds = _rounds(root)
     environment_rounds = [r for r in rounds if r.get("status") == "environment-blocked"]
     for round_record in environment_rounds:
@@ -688,7 +697,10 @@ def assess_completion(root: Path) -> dict[str, Any]:
             "candidates": len(candidates),
             "impact_branches": len(impacts),
             "eligible_handoffs": eligible,
+            "automatically_registered_open_research": len(sweep.get("open", [])),
+            "automatically_registered_risks": len(sweep.get("risks", [])),
         },
+        "resource_snapshot": resource_snapshot(root),
         "completion_hierarchy": [
             "mechanism-found",
             "candidate-demonstrated",

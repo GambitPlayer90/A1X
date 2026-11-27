@@ -23,6 +23,19 @@ FEATURES = (
     "automatic_frontier_sweep",
 )
 
+PROFILES = {
+    "v4.3.0-frozen": {name: False for name in FEATURES},
+    "v4.4.0-integrity": {
+        name: name in {
+            "executable_continuity",
+            "reachability_closure",
+            "semantic_progress",
+        }
+        for name in FEATURES
+    },
+    "v4.4.0-full": {name: True for name in FEATURES},
+}
+
 
 def default_feature_record() -> dict[str, Any]:
     return {
@@ -60,6 +73,18 @@ def set_feature(root: Path, *, name: str, enabled: bool) -> dict[str, Any]:
     record["updated_at"] = utc_now()
     write_json_atomic(root / "orchestration" / "features.json", record)
     event(root, "runtime.feature-changed", feature=name, enabled=enabled)
+    return record
+
+
+def apply_profile(root: Path, *, name: str) -> dict[str, Any]:
+    if name not in PROFILES:
+        raise ValidationError(f"unknown runtime feature profile: {name}")
+    record = feature_record(root)
+    record["features"] = dict(PROFILES[name])
+    record["profile"] = name
+    record["updated_at"] = utc_now()
+    write_json_atomic(root / "orchestration" / "features.json", record)
+    event(root, "runtime.feature-profile-applied", profile=name)
     return record
 
 

@@ -175,6 +175,7 @@ def _normalize_reachability(root: Path, raw: Any, *, artificial: bool) -> dict[s
         probe = str(path.get("next_probe") or "").strip()
         if status == "unknown" and not probe:
             raise ValidationError("an unknown reachability writer path requires a bounded next_probe")
+        non_privileged = path.get("non_privileged") is True
         normalized.append(
             {
                 "kind": kind,
@@ -182,13 +183,15 @@ def _normalize_reachability(root: Path, raw: Any, *, artificial: bool) -> dict[s
                 "actor": _text(path.get("actor"), "writer_path.actor"),
                 "target": _text(path.get("target"), "writer_path.target"),
                 "direction": _text(path.get("direction"), "writer_path.direction"),
+                "non_privileged": non_privileged,
                 "next_probe": probe,
                 "evidence_refs": refs,
             }
         )
     plausible = not artificial or any(
         item["status"] in {"observed", "possible"}
-        or (item["status"] == "unknown" and item["kind"] in {"dynamic", "external", "callback", "derived"})
+        and item["non_privileged"]
+        and item["evidence_refs"]
         for item in normalized
     )
     return {
@@ -196,7 +199,7 @@ def _normalize_reachability(root: Path, raw: Any, *, artificial: bool) -> dict[s
         "predicate": _text(raw.get("predicate"), "reachability.predicate"),
         "writer_paths": normalized,
         "plausible": plausible,
-        "policy": "plausibility allocates bounded research; only execution can establish reachability",
+        "policy": "bounded reachability research requires an evidence-backed non-privileged writer in the needed direction; only execution establishes reachability",
     }
 
 
@@ -238,7 +241,7 @@ def create_continuation_contract(root: Path, payload: dict[str, Any]) -> dict[st
     if closure_mode == "reachability" and not artificial:
         raise ValidationError("reachability closure requires an explicitly artificial prerequisite")
     if closure_mode == "reachability" and not reachability["plausible"]:
-        raise ValidationError("reachability closure lacks an evidence-backed or bounded-unknown writer path")
+        raise ValidationError("reachability closure lacks an evidence-backed non-privileged writer path")
     if closure_mode == "witness" and artificial:
         raise ValidationError("an artificial prerequisite must use reachability closure")
     continuation_id = allocate_id(root, "CONT")
@@ -289,6 +292,15 @@ def verify_continuation_contract(root: Path, continuation_id: str) -> dict[str, 
         errors.extend(verify_evidence_refs(root, waypoint.get("evidence_refs", [])))
     for writer in (record.get("reachability") or {}).get("writer_paths", []):
         errors.extend(verify_evidence_refs(root, writer.get("evidence_refs", [])))
+    for attempt_id in record.get("attempts", []):
+        attempt_path = root / "continuations" / f"{attempt_id}.json"
+        if not attempt_path.is_file():
+            errors.append(f"continuation attempt is missing: {attempt_id}")
+            continue
+        attempt = read_json(attempt_path)
+        errors.extend(verify_evidence_refs(root, attempt.get("extension_evidence_refs", [])))
+        for observation in attempt.get("assertions", []):
+            errors.extend(verify_evidence_refs(root, observation.get("evidence_refs", [])))
     immutable = {key: value for key, value in record.items() if key not in {"status", "attempts", "contract_sha256"}}
     if digest_json(immutable) != record.get("contract_sha256"):
         errors.append("continuation immutable contract fields changed")
@@ -307,6 +319,27 @@ def record_continuation_attempt(root: Path, continuation_id: str, payload: dict[
     result = str(payload.get("result") or "").strip()
     if result not in ATTEMPT_RESULTS:
         raise ValidationError(f"invalid continuation attempt result: {result}")
+    extension_run_id = payload.get("extension_run_id")
+    extension_replay_id = payload.get("extension_replay_id")
+    extension_refs = normalize_evidence_refs(root, payload.get("extension_evidence_refs", []), required=True)
+    if result == "operational-failure":
+        if extension_run_id is not None or extension_replay_id is not None:
+            raise ValidationError("an operationally failed continuation cannot claim a completed extension replay")
+    else:
+        extension_run_id = validate_id(_text(extension_run_id, "attempt.extension_run_id"), "RUN")
+        if extension_run_id == record["parent_run"]:
+            raise ValidationError("continuation advancement requires a distinct extension run after parent replay")
+        _run_record(root, extension_run_id)
+        if not (root / "runs" / extension_run_id / "observation.json").is_file():
+            raise ValidationError("continuation extension run must be semantically observed before advancement")
+        extension_replay_id = validate_id(_text(extension_replay_id, "attempt.extension_replay_id"), "REPLAY")
+        extension_replay = read_json(root / "replays" / f"{extension_replay_id}.json")
+        if extension_replay.get("run_id") != extension_run_id or extension_replay.get("passed") is not True:
+            raise ValidationError("continuation extension requires a passing replay of the distinct extension run")
+        if not any(item.get("type") == "run-receipt" and item.get("run_id") == extension_run_id for item in extension_refs):
+            raise ValidationError("continuation extension evidence lacks its run receipt")
+        if not any(item.get("type") == "replay" and item.get("replay_id") == extension_replay_id for item in extension_refs):
+            raise ValidationError("continuation extension evidence lacks its replay")
     observations = _objects(payload.get("assertions"), "attempt.assertions")
     by_id = {str(item.get("id")): item for item in observations}
     missing = [item for item in record["preserve_assertions"] if item not in by_id]
@@ -332,7 +365,10 @@ def record_continuation_attempt(root: Path, continuation_id: str, payload: dict[
         "id": attempt_id,
         "created_at": utc_now(),
         "continuation_id": continuation_id,
-        "replay_id": replay_id,
+        "parent_replay_id": replay_id,
+        "extension_run_id": extension_run_id,
+        "extension_replay_id": extension_replay_id,
+        "extension_evidence_refs": extension_refs,
         "result": result,
         "assertions": sorted(normalized_observations, key=lambda item: item["id"]),
         "prerequisite_observation": _text(payload.get("prerequisite_observation"), "attempt.prerequisite_observation"),

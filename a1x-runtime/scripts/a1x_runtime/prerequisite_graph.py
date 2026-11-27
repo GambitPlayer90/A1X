@@ -170,6 +170,24 @@ def resolve_backtrack_branch(root: Path, branch_id: str, *, attempt_id: str) -> 
     branch["attempt_id"] = attempt_id
     branch["status"] = "resolved" if attempt.get("result") in {"advanced", "narrowed", "resolved"} else attempt.get("result")
     write_json_atomic(path, branch)
+    graph_path = root / "compositions" / f"{branch['graph_id']}.json"
+    graph = read_json(graph_path)
+    for node in graph.get("nodes", []):
+        if node.get("id") != branch.get("prerequisite_id"):
+            continue
+        if attempt.get("result") == "refuted":
+            node["status"] = "refuted"
+        elif attempt.get("result") == "narrowed":
+            node["status"] = "narrowed"
+        elif attempt.get("result") in {"advanced", "resolved"}:
+            node["status"] = "resolved"
+        node["evidence_refs"] = [
+            ref
+            for observation in attempt.get("assertions", [])
+            for ref in observation.get("evidence_refs", [])
+        ]
+        break
+    write_json_atomic(graph_path, graph)
     event(root, "prerequisite.backtrack-resolved", branch_id=branch_id, attempt_id=attempt_id, status=branch["status"])
     return branch
 

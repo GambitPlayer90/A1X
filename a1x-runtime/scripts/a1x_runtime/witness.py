@@ -364,12 +364,27 @@ def needs_reachability_closure(handoff: dict[str, Any]) -> bool:
         witness.get("source_faithful") is False
         or witness.get("setup_taint") in {"attack-path", "unknown"}
     )
+    guard = handoff.get("reachability_guard", {})
+    plausible_unprivileged_writer = bool(
+        isinstance(guard, dict)
+        and guard.get("artificial_prerequisite") is True
+        and str(guard.get("predicate", "")).strip()
+        and any(
+            isinstance(item, dict)
+            and item.get("status") in {"observed", "possible"}
+            and item.get("non_privileged") is True
+            and str(item.get("direction", "")).strip()
+            and str(item.get("evidence_artifact", "")).strip()
+            for item in guard.get("writer_paths", [])
+        )
+    )
     return bool(
         handoff.get("status") in {"candidate", "near-miss", "blocked"}
         and handoff.get("execution", {}).get("ran") is True
         and conditional_setup
         and has_property_signal(handoff)
         and exact_state_blocker
+        and plausible_unprivileged_writer
         and handoff.get("evidence")
         and not witness_terminal(handoff)
     )

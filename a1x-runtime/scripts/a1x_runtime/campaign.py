@@ -376,7 +376,7 @@ def doctor() -> dict[str, Any]:
         "isolated_lanes": sandbox_preflight["usable"],
     }
     return {
-        "runtime_version": "4.3.0",
+        "runtime_version": "4.4.0",
         "platform": os.uname().sysname,
         "tools": found,
         "core_ready": core_ready,

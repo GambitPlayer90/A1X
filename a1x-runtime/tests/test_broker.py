@@ -27,10 +27,12 @@ from a1x_runtime.continuity import (
 from a1x_runtime.errors import ValidationError
 from a1x_runtime.explorer import retrieve_verified_contract
 from a1x_runtime.forks import start_fork, stop_fork
+from a1x_runtime.harness_coverage import create_harness_model, record_harness_telemetry, resolve_expansion_task, verify_harness_model
 from a1x_runtime.prerequisite_graph import create_backtrack_branch, create_prerequisite_graph, resolve_backtrack_branch, verify_prerequisite_graph
 from a1x_runtime.rpc import rpc_call
 from a1x_runtime.rpc_broker import uds_call
 from a1x_runtime.replay import prepare_replay, verify_replay
+from a1x_runtime.research_progress import record_progress, verify_progress
 from a1x_runtime.runs import execute_run, observe_run, plan_run
 from a1x_runtime.scale import create_round, run_round
 from a1x_runtime.security_oracles import (
@@ -256,6 +258,39 @@ if not rpc('evm_revert', [snapshot]):
         prepare_replay(self.root, run_id=run_id, destination=replay_workspace)
         replay = verify_replay(self.root, run_id=run_id, workspace=replay_workspace)
         self.assertTrue(replay["passed"], replay)
+        extension_plan = plan_run(
+            self.root,
+            hypothesis_id=hypothesis["id"],
+            run_class="candidate",
+            cwd=self.source,
+            argv=[sys.executable, "rpc_trace.py"],
+            timeout_seconds=30,
+            max_output_bytes=2_000_000,
+            inputs=[script],
+            property_statement="the continuation extension executes after parent replay",
+            support_prediction="trace_ok remains true in the extension run",
+            refute_prediction="the extension run fails",
+            success_regex='"trace_ok": true',
+            pass_env=["A1X_TEST_RPC_URL"],
+            inherit_env=[],
+            fork_id=None,
+        )
+        extension_run = extension_plan["run_id"]
+        self.assertTrue(execute_run(self.root, extension_run)["mechanical_success"])
+        observe_run(
+            self.root,
+            extension_run,
+            outcome="supports",
+            property_violated=True,
+            observation="distinct extension run executes after the replayed prefix",
+            impact="fixture continuity only",
+            metrics=[],
+            limitations="local deterministic fixture",
+        )
+        extension_workspace = Path(self.temporary.name) / "continuation-extension-replay"
+        prepare_replay(self.root, run_id=extension_run, destination=extension_workspace)
+        extension_replay = verify_replay(self.root, run_id=extension_run, workspace=extension_workspace)
+        self.assertTrue(extension_replay["passed"], extension_replay)
         run_ref = {"type": "run-receipt", "run_id": run_id, "outcome": "supports"}
         base = {
             "parent_run": run_id,
@@ -320,11 +355,47 @@ if not rpc('evm_revert', [snapshot]):
         }
         waypoint = create_continuation_contract(self.root, waypoint_payload)
         self.assertTrue(verify_continuation_contract(self.root, waypoint["id"])["valid"])
+        reachability_payload = json.loads(json.dumps(base))
+        reachability_payload["closure_mode"] = "reachability"
+        reachability_payload["selected_prerequisite"].update({
+            "predicate": "replace the artificial reserve state",
+            "success_condition": "a public call changes the reserve in the required direction",
+            "artificial": True,
+        })
+        reachability_payload["checkpoint"] = {
+            "kind": "transaction-checkpoint",
+            "transaction_index": 0,
+            "waypoint": None,
+        }
+        reachability_payload["reachability"] = {
+            "predicate": "reserve decreases through a public writer",
+            "writer_paths": [{
+                "kind": "static",
+                "status": "possible",
+                "actor": "attacker",
+                "target": "fixture reserve",
+                "direction": "decrease",
+                "non_privileged": False,
+                "next_probe": "execute the public writer",
+                "evidence_refs": [run_ref],
+            }],
+        }
+        with self.assertRaisesRegex(ValidationError, "non-privileged writer"):
+            create_continuation_contract(self.root, reachability_payload)
+        reachability_payload["reachability"]["writer_paths"][0]["non_privileged"] = True
+        reachability = create_continuation_contract(self.root, reachability_payload)
+        self.assertTrue(verify_continuation_contract(self.root, reachability["id"])["valid"])
         attempt = record_continuation_attempt(
             self.root,
             checkpoint["id"],
             {
                 "replay_id": replay["id"],
+                "extension_run_id": extension_run,
+                "extension_replay_id": extension_replay["id"],
+                "extension_evidence_refs": [
+                    {"type": "run-receipt", "run_id": extension_run, "outcome": "supports"},
+                    {"type": "replay", "replay_id": extension_replay["id"]},
+                ],
                 "result": "advanced",
                 "assertions": [{
                     "id": "prefix-sstore",
@@ -547,14 +618,14 @@ contract CompositionFixtureTest {
             hypothesis_id=hypothesis["id"],
             run_class="candidate",
             cwd=self.source,
-            argv=["forge", "test", "-vvvv"],
+            argv=["forge", "test", "--match-test", "testSequential", "-vvvv"],
             timeout_seconds=90,
             max_output_bytes=8_000_000,
             inputs=[config, contracts, tests],
-            property_statement="all declared composition programs execute",
-            support_prediction="five Foundry tests pass",
-            refute_prediction="one or more Foundry tests fail",
-            success_regex="5 passed",
+            property_statement="the producer effect satisfies the sequential consumer prerequisite",
+            support_prediction="the sequential Foundry test passes",
+            refute_prediction="the sequential test fails",
+            success_regex="1 passed",
             pass_env=[],
             inherit_env=[],
             fork_id=None,
@@ -567,7 +638,7 @@ contract CompositionFixtureTest {
             run_id,
             outcome="supports",
             property_violated=True,
-            observation="sequential, nested, temporal, multi-actor, and solver fixtures executed",
+            observation="the sequential parent prefix executed",
             impact="integration fixture only",
             metrics=[],
             limitations="synthetic composition contracts",
@@ -576,8 +647,42 @@ contract CompositionFixtureTest {
         prepare_replay(self.root, run_id=run_id, destination=workspace)
         replay = verify_replay(self.root, run_id=run_id, workspace=workspace)
         self.assertTrue(replay["passed"], replay)
-        run_ref = {"type": "run-receipt", "run_id": run_id, "outcome": "supports"}
-        replay_ref = {"type": "replay", "replay_id": replay["id"]}
+        extension_plan = plan_run(
+            self.root,
+            hypothesis_id=hypothesis["id"],
+            run_class="candidate",
+            cwd=self.source,
+            argv=["forge", "test", "-vvvv"],
+            timeout_seconds=90,
+            max_output_bytes=8_000_000,
+            inputs=[config, contracts, tests],
+            property_statement="the composed extension executes after replaying the parent fixture",
+            support_prediction="five Foundry tests pass in a distinct extension run",
+            refute_prediction="one or more extension tests fail",
+            success_regex="5 passed",
+            pass_env=[],
+            inherit_env=[],
+            fork_id=None,
+        )
+        extension_run = extension_plan["run_id"]
+        self.assertTrue(execute_run(self.root, extension_run)["mechanical_success"])
+        observe_run(
+            self.root,
+            extension_run,
+            outcome="supports",
+            property_violated=True,
+            observation="distinct extension run preserves the prefix and executes the composed programs",
+            impact="integration fixture only",
+            metrics=[],
+            limitations="synthetic composition contracts",
+        )
+        extension_workspace = Path(self.temporary.name) / "composition-extension-replay"
+        prepare_replay(self.root, run_id=extension_run, destination=extension_workspace)
+        extension_replay = verify_replay(self.root, run_id=extension_run, workspace=extension_workspace)
+        self.assertTrue(extension_replay["passed"], extension_replay)
+        parent_run_ref = {"type": "run-receipt", "run_id": run_id, "outcome": "supports"}
+        run_ref = {"type": "run-receipt", "run_id": extension_run, "outcome": "supports"}
+        replay_ref = {"type": "replay", "replay_id": extension_replay["id"]}
         trace_ref = {"type": "trace-artifact", "run_id": run_id, "path": "stdout.log"}
 
         continuation = create_continuation_contract(
@@ -595,7 +700,7 @@ contract CompositionFixtureTest {
                 },
                 "actors": [{"id": "attacker", "role": "caller", "address": None, "capabilities": ["call public functions"], "authority_basis": "unprivileged test caller"}],
                 "transactions": [{"index": 0, "actor": "attacker", "action": "execute topology fixture", "boundary": "callback", "expected_effects": ["consumer executes"], "obligations_created": []}],
-                "assertions": [{"id": "fixtures-pass", "predicate": "five Foundry fixtures pass", "expected": "true", "scope": "top-level replay", "required": True, "evidence_refs": [run_ref]}],
+                "assertions": [{"id": "fixtures-pass", "predicate": "the sequential parent fixture passes", "expected": "true", "scope": "top-level replay", "required": True, "evidence_refs": [parent_run_ref]}],
                 "preserve_assertions": ["fixtures-pass"],
                 "selected_prerequisite": {"id": "PREREQ-compose", "predicate": "B receives A state", "success_condition": "all topologies execute", "artificial": False, "dependencies": []},
                 "reachability": {"predicate": "public fixture calls", "writer_paths": []},
@@ -606,8 +711,14 @@ contract CompositionFixtureTest {
             continuation["id"],
             {
                 "replay_id": replay["id"],
+                "extension_run_id": extension_run,
+                "extension_replay_id": extension_replay["id"],
+                "extension_evidence_refs": [
+                    {"type": "run-receipt", "run_id": extension_run, "outcome": "supports"},
+                    {"type": "replay", "replay_id": extension_replay["id"]},
+                ],
                 "result": "resolved",
-                "assertions": [{"id": "fixtures-pass", "passed": True, "observed": "all fixtures replayed", "evidence_refs": [replay_ref]}],
+                "assertions": [{"id": "fixtures-pass", "passed": True, "observed": "the sequential parent fixture replayed", "evidence_refs": [{"type": "replay", "replay_id": replay["id"]}]}],
                 "prerequisite_observation": "all declared edges executed",
                 "next_action": "compose component contracts",
             },
@@ -661,8 +772,8 @@ contract CompositionFixtureTest {
         actor_execution = record_actor_execution(
             self.root,
             actor_program_id=actor_program["id"],
-            run_id=run_id,
-            replay_id=replay["id"],
+            run_id=extension_run,
+            replay_id=extension_replay["id"],
             observed_steps=[
                 {"index": 0, "executed": True, "observation": "attacker first"},
                 {"index": 1, "executed": True, "observation": "victim second"},
@@ -712,8 +823,8 @@ contract CompositionFixtureTest {
             "left_component": component_a["id"],
             "right_component": component_b["id"],
             "precondition_checks": [{"precondition_id": "ready", "supplied_by": "ready", "passed": True, "observed": "producer value equals seven", "evidence_refs": [run_ref]}],
-            "run_id": run_id,
-            "replay_id": replay["id"],
+            "run_id": extension_run,
+            "replay_id": extension_replay["id"],
             "actor_program_id": actor_program["id"],
             "evidence_refs": [run_ref, replay_ref],
         }
@@ -747,9 +858,86 @@ contract CompositionFixtureTest {
         self.assertTrue(z3_job["result"]["satisfiable"])
         self.assertEqual(exact["result"]["models"][0]["objective"], z3_job["result"]["models"][0]["objective"])
         for job in (exact, z3_job):
-            validated = validate_solver_job(self.root, solver_job_id=job["id"], run_id=run_id, replay_id=replay["id"])
+            validated = validate_solver_job(self.root, solver_job_id=job["id"], run_id=extension_run, replay_id=extension_replay["id"])
             self.assertEqual(validated["status"], "concretely-replayed")
             self.assertTrue(verify_solver_job(self.root, job["id"])["valid"])
+
+        harness_items = []
+        for category in ("state-writer", "valuable-consumer", "callback", "actor-capability", "lifecycle", "numeric-boundary"):
+            missing = category == "numeric-boundary"
+            harness_items.append({
+                "id": category,
+                "category": category,
+                "protocol_surface": f"fixture {category}",
+                "security_relevance": "composition fixture coverage",
+                "status": "missing" if missing else "represented",
+                "handler": None if missing else {
+                    "state-writer": "CompositionFixtureTest.testSequential",
+                    "valuable-consumer": "CompositionFixtureTest.testSequential",
+                    "callback": "CompositionFixtureTest.testNestedCallback",
+                    "actor-capability": "CompositionFixtureTest.testMultiActor",
+                    "lifecycle": "CompositionFixtureTest.testTemporal",
+                }[category],
+                "action": None if missing else "execute Foundry fixture",
+                "next_probe": "execute the exact integer boundary fixture" if missing else None,
+                "evidence_refs": [run_ref],
+            })
+        harness = create_harness_model(self.root, {"name": "composition fixture harness", "surface_id": None, "items": harness_items})
+        telemetry = record_harness_telemetry(
+            self.root,
+            harness_id=harness["id"],
+            run_id=extension_run,
+            replay_id=extension_replay["id"],
+            action_stats=[{"item_id": item["id"], "executions": 1, "precondition_failures": 0, "distinct_states": 1} for item in harness_items],
+            state_fingerprints=["sequential", "nested", "temporal", "multi-actor", "solver-boundary"],
+            evidence_refs=[run_ref, replay_ref],
+        )
+        self.assertEqual(telemetry["run_id"], extension_run)
+        resolved_task = resolve_expansion_task(
+            self.root,
+            task_id=harness["expansion_tasks"][0],
+            status="executed",
+            resolution="the exact integer boundary fixture executes and replays",
+            run_id=extension_run,
+            replay_id=extension_replay["id"],
+            evidence_refs=[run_ref, replay_ref],
+        )
+        self.assertEqual(resolved_task["status"], "executed")
+        self.assertTrue(verify_harness_model(self.root, harness["id"])["valid"])
+
+        information = record_progress(self.root, {
+            "lineage_id": "LINEAGE-composition",
+            "category": "information",
+            "kind": "feasible-region",
+            "parent_id": None,
+            "constraints": [{"variable": "x", "lower": 0, "upper": 20, "excluded": [], "unit": "integer"}],
+            "finding": "the broad exact-integer domain is feasible",
+            "assumptions": ["integer arithmetic"],
+            "evidence_refs": [run_ref],
+        })
+        narrowed = record_progress(self.root, {
+            "lineage_id": "LINEAGE-composition",
+            "category": "information",
+            "kind": "feasible-region",
+            "parent_id": information["id"],
+            "constraints": [{"variable": "x", "lower": 5, "upper": 10, "excluded": [6], "unit": "integer"}],
+            "finding": "execution narrows the feasible interval",
+            "assumptions": ["integer arithmetic"],
+            "evidence_refs": [run_ref],
+        })
+        witness_progress_record = record_progress(self.root, {
+            "lineage_id": "LINEAGE-composition",
+            "category": "witness",
+            "kind": "settlement",
+            "parent_id": None,
+            "contiguous_phase_index": 3,
+            "predicate": "composition settles",
+            "observed": "all fixture transactions finish",
+            "prerequisite_id": "P-consume",
+            "evidence_refs": [run_ref, replay_ref],
+        })
+        self.assertTrue(verify_progress(self.root, narrowed["id"])["valid"])
+        self.assertTrue(verify_progress(self.root, witness_progress_record["id"])["valid"])
         tools = probe_solver_tools()
         self.assertTrue(tools["foundry"]["version_probe_passed"])
         self.assertTrue(tools["z3-python"]["version_probe_passed"])
@@ -807,6 +995,7 @@ handoff = {
  'prerequisites':[{'id':'','description':'blind target not started','kind':'environment','status':'open','resolution_condition':'operator starts blind test','evidence_artifact':''}],
  'witness':{'bug_class':'other','source_faithful':False,'setup_taint':'unknown','phases':[{'id':phase,'status':'open','property':'','evidence_artifact':''} for phase in ('prepare','trigger','persist','impact')],'signals':[]},
  'continuation_replay':{'required':False,'parent_manifests':[],'parent_replayed':False,'assertions_preserved':False,'replay_artifact':''},
+ 'reachability_guard':{'artificial_prerequisite':False,'predicate':'none','writer_paths':[]},
  'dimensions':{'evidence_level':'E1','reachability':'high','security_consequence':'unknown','state_novelty':'low','next_test_cost':'low'}
 }
 out.write_text(json.dumps(handoff))

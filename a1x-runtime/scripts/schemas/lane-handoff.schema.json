@@ -160,6 +160,31 @@
       },
       "required": ["required", "parent_manifests", "parent_replayed", "assertions_preserved", "replay_artifact"]
     },
+    "reachability_guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artificial_prerequisite": {"type": "boolean"},
+        "predicate": {"type": "string"},
+        "writer_paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "actor": {"type": "string"},
+              "target": {"type": "string"},
+              "direction": {"type": "string"},
+              "status": {"type": "string", "enum": ["observed", "possible", "unknown", "contradicted"]},
+              "non_privileged": {"type": "boolean"},
+              "evidence_artifact": {"type": "string"}
+            },
+            "required": ["actor", "target", "direction", "status", "non_privileged", "evidence_artifact"]
+          }
+        }
+      },
+      "required": ["artificial_prerequisite", "predicate", "writer_paths"]
+    },
     "next_action": {"type": "string"},
     "dimensions": {
       "type": "object",
@@ -174,5 +199,5 @@
       "required": ["evidence_level", "reachability", "security_consequence", "state_novelty", "next_test_cost"]
     }
   },
-  "required": ["lane_id", "status", "mechanism", "mechanism_family", "consumer", "tested_obligation", "discriminator", "causal_identity", "causal_anchors", "attacker_fingerprint", "state_fingerprint", "impact_stage", "terminal_impact", "execution", "blocker", "evidence", "artifacts", "refutations", "unresolved", "prerequisites", "witness", "continuation_replay", "next_action", "dimensions"]
+  "required": ["lane_id", "status", "mechanism", "mechanism_family", "consumer", "tested_obligation", "discriminator", "causal_identity", "causal_anchors", "attacker_fingerprint", "state_fingerprint", "impact_stage", "terminal_impact", "execution", "blocker", "evidence", "artifacts", "refutations", "unresolved", "prerequisites", "witness", "continuation_replay", "reachability_guard", "next_action", "dimensions"]
 }

@@ -37,6 +37,8 @@ At a pinned block confirm runtime implementation/modules, configuration, roles, 
 - current deployed applicability;
 - conditional applicability with unresolved prerequisite.
 
+A conditional mechanism may receive bounded reachability research without being promoted as a validated vulnerability. Evidence allocation and evidence promotion are separate decisions.
+
 ## Calibrate the claim
 
 Read [claim-calibration.md](references/claim-calibration.md). State the narrowest root cause and measured consequence supported. Separate gross extraction, net profit, victim/protocol loss, and maximum exposed value. Do not infer protocol-wide exposure from TVL.
@@ -44,6 +46,8 @@ Read [claim-calibration.md](references/claim-calibration.md). State the narrowes
 ## Distinguish candidate validity from campaign completeness
 
 A valid ownership, role, voting, configuration, queue, or upgrade takeover can pass evidence gates while still being an intermediate primitive. Enumerate every reachable value, custody, settlement, governance, and upgrade consumer. For each, record a terminal demonstration, a causal refutation, or a concrete blocker. Run the automatically created expansion round before claiming the maximum credible consequence. E0–E6 validates the stated candidate; it does not authorize the campaign to stop.
+
+Before completion, run the runtime sweep over open continuation contracts, prerequisite branches, uncomposed components, unexecuted actor programs, unvalidated solver witnesses, unresolved harness-expansion tasks, impact branches, and protected evolution failures. The sweep registers controller-visible frontier items automatically. Classify each as resolved, refuted, budget-limited, environment-blocked, or explicitly deferred; absence from coordinator prose is not closure.
 
 ## Deduplicate by cause
 

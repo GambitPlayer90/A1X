@@ -36,9 +36,17 @@ Prefer the shortest causal witness. Add complexity only when a prerequisite requ
 
 Then perform an adversarial extension pass. Treat every reached capability as a possible prefix, not a final severity: ask which other contract, lifecycle phase, generic message/attestation layer, governance executor, callback, or settlement consumer trusts it. Re-run the path assuming the attacker controls both sides, all apparent users, and any permissionless object or callback. Search setup -> delay/maturity -> trigger -> settlement histories, within-transaction transient reuse, repeatable cycles, reserve compression, and alternate consumers. Do not force long chains, but do not analyze a cross-contract primitive in isolation.
 
+For reusable components, record executable preconditions, effects, resources and obligations, invalidated conditions, actor capabilities, and transaction/callback context. Register their prerequisites in the runtime graph rather than matching prose or lineage-local identifiers. Compose components in one of three explicit topologies:
+
+- sequential: execute A, assert its effects, verify B's preconditions, then execute B;
+- nested: replay `A_pre`, enter B through the observed callback or external-call waypoint, then complete `A_post` in the same top-level transaction;
+- temporal: execute A, apply the declared block/time/keeper transition, then execute B.
+
+Every composition is a new experiment. A narrative match is not a composed result. Preserve demonstrated components while allowing evidence-driven backtracking over preparation amounts, ordering, actors, or an earlier branch. Re-run inherited assertions after each revision and record any regression.
+
 ## Model actors, callbacks, and time
 
-Read [actors-and-interleavings.md](references/actors-and-interleavings.md) whenever the path uses multiple identities, helper contracts, callbacks, honest users, keepers, time, or asynchronous settlement. Treat contract deployment and custom callback logic as first-class attacker actions.
+Read [actors-and-interleavings.md](references/actors-and-interleavings.md) whenever the path uses multiple identities, helper contracts, callbacks, honest users, keepers, time, or asynchronous settlement. Treat contract deployment and custom callback logic as first-class attacker actions. Represent attacker, victim, keeper, liquidator, and governance steps as executable actor programs; an honest actor's transaction may be a required edge, not fixture setup.
 
 ## Maintain an execution frontier
 
@@ -69,4 +77,4 @@ Update the hypothesis file with:
 4. supporting and refuting execution predictions;
 5. chosen next tool and why it is discriminating.
 
-Do not claim reachability if a state was produced only by arbitrary storage mutation or privileged impersonation.
+Do not claim reachability if a state was produced only by arbitrary storage mutation or privileged impersonation. Preserve a reproducible conditional mechanism as conditional evidence, and route its exact artificial predicate to a bounded K=1R reachability investigation only when a non-privileged writer can move the state in the required direction.

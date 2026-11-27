@@ -28,11 +28,13 @@ Read [fork-fidelity.md](references/fork-fidelity.md) for forked deployments, [ha
 
 Start with the narrowest deterministic test and sufficient verbosity to observe the relevant calls and state changes. Execute it through `$a1x-runtime` so the replay-exact **redacted** command template, exit status, bounded logs, input hashes, target/harness identity, and process-group outcome are retained. Replace secret expansions with exact `@env:NAME` arguments.
 
+Run deterministic trace analysis for storage writes, external-call boundaries, reverted or overwritten transient values, revert selectors and operand context, and balance/accounting residuals. Treat a transient window as a waypoint inside the original top-level transaction; never resume it as a new transaction. Preserve even one-unit residuals or internal-ledger deltas as phase-local signals, then test whether repetition or a downstream consumer turns them into a security violation.
+
 Read [trace-diagnosis.md](references/trace-diagnosis.md) when the attempt fails or behaves unexpectedly. Classify the failure before editing code.
 
 ## Iterate with execution feedback
 
-Revise the contract model or attack path based on observed facts. Keep useful earlier attempts. Compilation repairs and interface corrections are engineering work; record them separately from research progress. Do not repeatedly mutate amounts or swap order without a mechanism explaining why the change should cross a relevant boundary.
+Revise the contract model or attack path based on observed facts. Keep useful earlier attempts. Compilation repairs and interface corrections are engineering work; record them separately from research progress. Do not repeatedly mutate amounts or swap order without a mechanism explaining why the change should cross a relevant boundary. Record witness progress separately from information progress such as a narrowed feasible interval, mapped revert region, disproved assumption, or newly observed dependency.
 
 If the uncertainty is a large state/sequence space, route to `$a1x-fuzz`. If it is a numeric, branch, or symbolic constraint, route to `$a1x-solve`. For reserve compression, repeated precision drift, or revert-heavy iterative AMM math, preserve the reached prefix and use `$a1x-solve`'s staged fixed-point search: phase-local invariant/internal-credit oracle, exact integer mirror, nested outer repetition/compression and inner boundary search, mapped revert holes, bounded backoff, then settlement and realization. If execution exposes an unknown writer/dependency, return to `$a1x-recon`.
 
@@ -48,6 +50,8 @@ A candidate is locally demonstrated only when:
 6. relevant input and output artifacts are preserved.
 
 Route demonstrated candidates to `$a1x-validate` for clean replay and claim calibration.
+
+For protected continuation, first replay the parent assertions from its immutable packet. Perform the attempted extension in a distinct observed run, replay that run, and attach both receipts. Parent replay alone cannot establish extension progress.
 
 ## Output contract
 

@@ -6,12 +6,15 @@
 - `events.jsonl` is an append-only, sequence-numbered hash chain in v4. Authoritative JSON writes are write-ahead materialization events; recovery reapplies a valid pending tail before campaign work resumes. Explicit v3 migration anchors the legacy bytes and never rewrites them.
 - `evidence/objects/sha256/` holds immutable raw objects; `evidence/bundles/` holds typed claims and provenance.
 - `recon/vNNNN/` holds immutable facts and explicit unknowns outside the source tree.
+- Continuation, trace-fact, surface, composition, actor, oracle, harness, and solver-job records are authoritative hash-chained campaign materializations, not disposable worker notes.
 - Plans, receipts, observations, and replay verifications have SHA-256 seals.
 - A run plan and its observation are single-use. Change an input, command, property, prediction, or interpretation by creating a new run.
 - Declared file and directory hashes exclude common build caches but include harness and configuration inputs.
 - Atomic writes use a temporary file, `fsync`, and rename under a campaign lock where allocation or shared counters require serialization.
 
 The runtime does not make the full campaign tamper-evident against a malicious local user. Seals catch accidental or out-of-band mutation; they are not signatures.
+
+A continuation result is not inherited prose. The parent replay and preserved assertions are one evidence relationship; the distinct observed extension run and its clean replay are another. An operational failure may omit the extension pair but cannot count as semantic stagnation or prerequisite closure. A within-transaction waypoint is a trace coordinate inside the enclosing top-level transaction, never a resumable blockchain state.
 
 ## Typed evidence references
 

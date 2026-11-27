@@ -121,7 +121,8 @@ def _authoritative_json_path(root: Path, path: Path) -> bool:
         "obligations", "hypotheses", "runs", "forks", "candidates", "replays",
         "reviews", "scale", "frontier", "impact", "orchestration", "evidence",
         "recon", "capabilities", "operations", "prestate", "rsa", "migrations",
-        "evaluation",
+        "evaluation", "continuations", "trace-facts", "surfaces", "compositions",
+        "actors", "oracles", "harnesses", "solver-jobs",
     }
 
 

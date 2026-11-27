@@ -18,11 +18,18 @@ Use A1X only on contracts and environments you are authorized to test. The workf
 - `a1x-scale` — test-time scaling and RSA search
 - `a1x-validate` — replay, controls, impact, and review
 
-The runtime version in this repository is `4.3.0`.
+The runtime version in this repository is `4.4.0`.
+
+Version 4.4 adds executable parent-to-child continuity, separate witness and reachability closure, transaction checkpoints and within-transaction waypoints, prerequisite graphs with controlled backtracking, fair attempt-aware depth allocation, sequential/nested/temporal RSA composition, multi-actor programs, deterministic trace and fork-surface facts, broadened security oracles, harness-surface telemetry, exact integer/Z3 jobs, and automatic completion-state sweeping. Advancement is tied to observed runs and clean replay; operational failures remain separate from semantic stagnation.
 
 ## Install the skills
 
-Copy all skill packages into the shared agent skill directory:
+Clone the repository, then copy the skill packages into the shared agent skill directory:
+
+```bash
+git clone git@github.com:Gambitplayer90/A1X.git
+cd A1X
+```
 
 ```bash
 mkdir -p "$HOME/.agents/skills"
@@ -35,6 +42,8 @@ done
 ```
 
 Invoke the suite with `$a1x`. The compatibility entry point routes full investigations through `$a1x-hunt`; it does not bypass the runtime controller.
+
+Run the runtime checks before the first campaign. Optional specialist tools are capability-gated per target; a machine-level installation is never treated as target readiness. The bundled exact-integer search needs only Python. The Z3 adapter uses `A1X_Z3_PYTHON` when set, or the isolated A1X environment under `~/.local/share/a1x/z3-4.15.4.0` when present.
 
 ## Campaign MCP
 

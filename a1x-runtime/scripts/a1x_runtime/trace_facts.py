@@ -156,6 +156,7 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
             "loads": [],
             "writes": [],
             "overwrites": [],
+            "transient_windows": [],
             "revert_boundaries": [],
             "halts": [],
             "state_diff": _state_diff(trace),
@@ -202,7 +203,7 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
             value = _hex_word(stack[-3]) if op in {"CALL", "CALLCODE"} and len(stack) >= 3 else None
             calls.append({**base, "target": target, "value": value})
         if op in HALT_OPS:
-            halt = {**base, "error": log.get("error")}
+            halt = {**base, "error": log.get("error"), "stack_tail": [_hex_word(item) for item in stack[-4:]]}
             halts.append(halt)
             if op in {"REVERT", "INVALID"}:
                 reverts.append(halt)
@@ -210,6 +211,7 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
     for write in writes:
         grouped[(write["storage"], write["depth"], write["slot"])].append(write)
     overwrites = []
+    transient_windows = []
     for (storage, depth, slot), values in sorted(grouped.items(), key=lambda item: str(item[0])):
         distinct = []
         for value in values:
@@ -227,6 +229,23 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
                     "any_reverted": any(item["reverted"] for item in values),
                 }
             )
+            first = values[0]["index"]
+            last = values[-1]["index"]
+            window_calls = [call for call in calls if first < call["index"] < last]
+            if window_calls and len(distinct) > 1:
+                transient_windows.append(
+                    {
+                        "storage": storage,
+                        "depth": depth,
+                        "slot": slot,
+                        "open_write_index": first,
+                        "close_write_index": last,
+                        "temporary_values": distinct[:-1],
+                        "closing_value": distinct[-1],
+                        "external_calls": window_calls,
+                        "classification": "candidate transient invariant window; protocol meaning and final restoration require an oracle",
+                    }
+                )
     return {
         "format": "struct-logs",
         "failed": top_failed,
@@ -236,6 +255,7 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
         "loads": loads,
         "writes": writes,
         "overwrites": overwrites,
+        "transient_windows": transient_windows,
         "revert_boundaries": reverts,
         "halts": halts,
         "state_diff": [],

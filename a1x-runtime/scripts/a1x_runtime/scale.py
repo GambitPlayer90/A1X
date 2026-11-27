@@ -18,11 +18,13 @@ from typing import Any
 
 from .atomic import exclusive_lock, read_json, write_json_atomic, write_text_atomic
 from .errors import BudgetError, IntegrityError, ValidationError
+from .features import enabled
 from .forks import start_fork, stop_fork
 from .hashing import file_sha256, is_relative_to, path_digest
 from .process import execute
 from .records import allocate_id, event, require_campaign, schema_for, utc_now
 from .sandbox import bubblewrap_preflight
+from .scheduling import record_lineage_attempts, resource_snapshot, select_fair_lineages
 from .witness import (
     OPEN_PREREQUISITE_STATES,
     canonicalize_prerequisites,
@@ -123,9 +125,10 @@ Requirements:
 - Trace any new authority or capability through downstream value, upgrade, governance, settlement, and custody consumers. Mark whether the demonstrated consequence is terminal.
 - Preserve diversity: do not copy the most obvious mechanism unless independent evidence leads there.
 - Identify the tested obligation and discriminator. Provide human-readable writer/guard/consumer/state/property identity, a stable `attacker_fingerprint`, `state_fingerprint`, artifact anchors for each component, and the ordered transition sequence. The attacker-model and state-shape anchors must be dedicated one-line artifacts whose text exactly equals those two fingerprints. Use exact `path:line[:end]` source regions or execution/trace artifacts; coarse, generic, or mismatched actor/state anchors remain unique and are never used to discard another lead.
-- Track witness construction explicitly. Use the exact profile for the selected bug class: economic=`prepare,trigger,persist,settle,realize,impact`; settlement=`prepare,trigger,persist,settle,impact`; authorization=`prepare,cross-authorization,consume-authority,impact`; governance=`prepare,acquire-influence,queue,execute,impact`; upgrade=`prepare,obtain-upgrade-authority,install-code,invoke,impact`; liveness=`prepare,block,persist,bound-recovery,impact`; other=`prepare,trigger,persist,impact`. Mark every phase and attach evidence to each reached phase. Record invariant/share-rate drift, internal credit, authorization crossing, persistent liveness failure, custody loss, and attacker net as separate phase-local signals. Never mark execution source-faithful when an exploit step relies on deal/storage/code mutation, privileged impersonation, or another unavailable capability.
+- Track witness construction explicitly. Use the exact profile for the selected bug class: economic=`prepare,trigger,persist,settle,realize,impact`; settlement=`prepare,trigger,persist,settle,impact`; authorization=`prepare,cross-authorization,consume-authority,impact`; governance=`prepare,acquire-influence,queue,execute,impact`; upgrade=`prepare,obtain-upgrade-authority,install-code,invoke,impact`; liveness=`prepare,block,persist,bound-recovery,impact`; other=`prepare,trigger,persist,impact`. Mark structurally absent phases `not-applicable` (for example, persistence in a fully atomic exploit) rather than inventing them, and attach evidence to every reached phase. Record invariant/share-rate drift, internal credit, authorization crossing, persistent liveness failure, custody loss, and attacker net as separate phase-local signals. Never mark execution source-faithful when an exploit step relies on deal/storage/code mutation, privileged impersonation, or another unavailable capability.
 - Preserve inherited prerequisite IDs exactly. Close, narrow, or refute one only with an evidence artifact. Use an empty/new ID for a newly discovered prerequisite; the runtime assigns its stable ID. Do not split or rename blockers to manufacture progress.
 - Always populate `continuation_replay`. For a lane with `.a1x-parent-evidence`, hash every parent `manifest.json`, replay the inherited executable prefix before extending it, assert the inherited properties, and attach the replay log. For a lane without parents, set `required=false`, use an empty manifest array and replay artifact, and set both replay booleans false. A protected or recombination child is rejected unless parent replay and inherited assertions pass.
+- Always populate `reachability_guard`. If an experiment used artificial attack-path state, identify the exact predicate and attach a static, call-graph, or executed writer-path artifact showing whether an unprivileged protocol action can change the required state in the needed direction. Conditional mechanisms receive protected reachability work only when at least one such path is observed or concretely possible; arbitrary storage mutation alone is not eligible.
 - Attack intended usage. Deliberately construct attacker-controlled actors, identities, markets, tokens, callbacks, transaction boundaries, lifecycle interruptions, dust/empty/one-sided states, repeated cycles, alternate consumers, rounding thresholds, and governance/configuration denominators whenever relevant. A normal happy-path pass is not a security result.
 - A refutation must test the strongest reachable form of the mechanism and eliminate a necessary transition under the real attacker model. A revert, failed harness, ordinary-state test, intended-use argument, or absent current profit is inconclusive. A blocker must name the exact missing prerequisite, evidence artifact, and resolution condition. "Nothing found" is invalid.
 - Return only the structured handoff required by the output schema. Use lane_id exactly `{lane_id}`.
@@ -473,6 +476,7 @@ def _validate_handoff(
         "prerequisites",
         "witness",
         "continuation_replay",
+        "reachability_guard",
         "next_action",
         "dimensions",
     }
@@ -551,6 +555,17 @@ def _validate_handoff(
         "replay_artifact": "",
     }:
         raise IntegrityError("independent lane continuation_replay must use the canonical empty value")
+
+    reachability_guard = data.get("reachability_guard")
+    if not isinstance(reachability_guard, dict) or not isinstance(reachability_guard.get("writer_paths"), list):
+        raise IntegrityError("handoff reachability_guard must declare its artificial prerequisite and writer paths")
+    for writer_path in reachability_guard.get("writer_paths", []):
+        if not isinstance(writer_path, dict) or writer_path.get("status") not in {"observed", "possible", "unknown", "contradicted"}:
+            raise IntegrityError("handoff reachability writer path is malformed")
+        if writer_path.get("status") in {"observed", "possible", "contradicted"}:
+            artifact_ref = str(writer_path.get("evidence_artifact", ""))
+            if _lane_artifact(path, artifact_ref) is None:
+                raise IntegrityError("evidence-backed reachability writer path artifact does not exist")
 
     refutation_deferred = False
     if (
@@ -1581,6 +1596,7 @@ def _export_parent_packet(root: Path, destination: Path, label: str, handoff: di
     witness = handoff.get("witness", {})
     references.update(str(item.get("evidence_artifact", "")) for item in witness.get("phases", []))
     references.update(str(item.get("evidence_artifact", "")) for item in witness.get("signals", []))
+    references.update(str(item.get("evidence_artifact", "")) for item in handoff.get("reachability_guard", {}).get("writer_paths", []))
     exported = []
     for reference in sorted(item for item in references if item):
         source = _lane_artifact(handoff_path, reference)
@@ -1820,15 +1836,24 @@ def create_recombination_round(
         current = closure_by_lineage.get(lineage_id)
         if current is None or (_fitness(handoff), handoff["lane_id"]) > (_fitness(current), current["lane_id"]):
             closure_by_lineage[lineage_id] = handoff
-    closure_parents = sorted(
-        closure_by_lineage.values(), key=lambda item: (_fitness(item), item["lane_id"]), reverse=True
-    )[: min(closure_lanes, children)]
+    next_generation = int(read_json(root / "scale" / parent_round / "plan.json").get("generation", 0)) + 1
+    selected_lineages = select_fair_lineages(
+        root,
+        candidates=[
+            {"lineage_id": lineage_id, "priority": [*_fitness(handoff), handoff["lane_id"]]}
+            for lineage_id, handoff in closure_by_lineage.items()
+        ],
+        slots=min(closure_lanes, children),
+        generation=next_generation,
+    )
+    closure_parents = [closure_by_lineage[lineage_id] for lineage_id in selected_lineages]
 
     pairs = list(combinations(eligible, 2))
+    topologies = ("sequential", "nested", "temporal") if enabled(root, "three_mode_rsa") else ("sequential",)
     pair_topologies = [
         (left, right, topology)
         for left, right in pairs
-        for topology in ("sequential", "nested", "temporal")
+        for topology in topologies
     ]
     pair_topologies.sort(
         key=lambda candidate: (
@@ -1987,7 +2012,7 @@ Ignore the parent conclusions. Re-read the isolated target from a different stat
         "lanes": lanes,
         "parent_round": parent_round,
         "purpose": "recombination",
-        "generation": int(read_json(root / "scale" / parent_round / "plan.json").get("generation", 0)) + 1,
+        "generation": next_generation,
         "status": "planned",
     }
     write_json_atomic(round_dir / "plan.json", plan)
@@ -2036,12 +2061,13 @@ def evolve_population(
     allow_env_auth: bool,
     per_lane_timeout: int,
     closure_lanes: int = 1,
+    adaptive_extra_generations: int = 3,
     lane_forks: str = "auto",
     cyber_access_program: str = "standard",
 ) -> dict[str, Any]:
     """Run bounded RSA generations with fresh injections and a marginal-gain stop rule."""
-    if generations <= 0 or stagnation_rounds <= 0 or closure_lanes < 0:
-        raise ValidationError("generations/stagnation must be positive and closure lanes non-negative")
+    if generations <= 0 or stagnation_rounds <= 0 or closure_lanes < 0 or adaptive_extra_generations < 0:
+        raise ValidationError("generations/stagnation must be positive and closure/adaptive allowances non-negative")
     current = parent_round
     history: list[dict[str, Any]] = []
     lineage_no_gain: dict[str, int] = {}
@@ -2049,7 +2075,14 @@ def evolve_population(
     previous_keys: set[str] = set()
     zero_fitness = _fitness({})
     stop_reason = "generation-budget"
-    for generation in range(1, generations + 1):
+    maximum_generations = generations + adaptive_extra_generations
+    for generation in range(1, maximum_generations + 1):
+        if generation > generations:
+            previous = history[-1] if history else {}
+            if not (previous.get("improved") is True and int(previous.get("protected_unresolved_leads", 0)) > 0):
+                stop_reason = "generation-budget"
+                break
+            stop_reason = "adaptive-depth-budget"
         aggregate = aggregate_round(root, round_id=current)
         eligible = [h for h in _population_handoffs(aggregate) if _rsa_eligible(h)]
         if len(eligible) < 2 and not any(closure_mode(item) is not None for item in eligible):
@@ -2119,6 +2152,24 @@ def evolve_population(
             }
             missing_closure = bool(closure_ids - completed_ids)
             if missing_closure or len(child_eligible) < 2:
+                outcomes = []
+                result_by_lane = {
+                    str(item.get("lane_id")): item
+                    for item in (read_json(root / "scale" / child["id"] / "results.json").get("results", []) if (root / "scale" / child["id"] / "results.json").is_file() else [])
+                }
+                for lane in child_plan.get("lanes", []):
+                    if lane.get("lane_role") not in {"witness-closure", "reachability-closure", "recombination"}:
+                        continue
+                    result = result_by_lane.get(str(lane.get("lane_id")), {})
+                    outcomes.append({
+                        "lineage_id": str(lane.get("lineage_id")),
+                        "operational_failure": result.get("status") != "completed",
+                        "semantic_progress": False,
+                        "witness_progress": False,
+                        "information_progress": False,
+                    })
+                if outcomes:
+                    record_lineage_attempts(root, generation=generation, outcomes=outcomes)
                 stop_reason = "protected-witness-closure-failed" if missing_closure else "insufficient-valid-partial-generation"
                 history.append(
                     {
@@ -2146,6 +2197,28 @@ def evolve_population(
             semantic_deltas=semantic_deltas,
         )
         improved = bool(improved_lineages)
+        child_plan = read_json(root / "scale" / child["id"] / "plan.json")
+        results_path = root / "scale" / child["id"] / "results.json"
+        result_by_lane = {
+            str(item.get("lane_id")): item
+            for item in (read_json(results_path).get("results", []) if results_path.is_file() else [])
+        }
+        attempt_outcomes = []
+        for lane in child_plan.get("lanes", []):
+            if lane.get("lane_role") not in {"witness-closure", "reachability-closure", "recombination"}:
+                continue
+            lane_id = str(lane.get("lane_id"))
+            delta = semantic_deltas.get(lane_id, {})
+            claimed = delta.get("claimed", {}) if isinstance(delta.get("claimed"), dict) else {}
+            attempt_outcomes.append({
+                "lineage_id": str(lane.get("lineage_id")),
+                "operational_failure": result_by_lane.get(lane_id, {}).get("status") != "completed",
+                "semantic_progress": delta.get("improved") is True,
+                "witness_progress": any(claimed.get(key) is True for key in ("resolved_prerequisite", "phase_advanced", "stronger_consumer")),
+                "information_progress": any(claimed.get(key) is True for key in ("new_causal_edge", "new_reachable_waypoint", "stronger_oracle", "mechanism_specific_refutation")),
+            })
+        if attempt_outcomes:
+            record_lineage_attempts(root, generation=generation, outcomes=attempt_outcomes)
         pool = merge_population(root, parent_round=current, child_round=child["id"], maximum=max(4, children + fresh_lanes + 2))
         pool_aggregate = aggregate_round(root, round_id=pool["id"])
         protected = [h for h in _population_handoffs(pool_aggregate) if _rsa_eligible(h) and _protected_lead(h)]
@@ -2185,6 +2258,9 @@ def evolve_population(
         "final_round": current,
         "history": history,
         "stop_reason": stop_reason,
+        "base_generation_budget": generations,
+        "adaptive_extra_generation_budget": adaptive_extra_generations,
+        "resource_snapshot": resource_snapshot(root),
     }
     write_json_atomic(root / "scale" / f"{record_id}.json", record)
     event(root, "scale.population-evolved", evolution_id=record_id, generations=len(history), stop_reason=stop_reason)

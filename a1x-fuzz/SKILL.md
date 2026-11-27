@@ -39,11 +39,15 @@ Read [handlers-and-ghosts.md](references/handlers-and-ghosts.md). Handlers shoul
 
 Use ghost state derived independently from the target implementation. Avoid duplicating the exact formula under test. Track assets, liabilities, claims, actor contributions, and expected lifecycle state at the level required by the obligation.
 
+Before treating a campaign as representative, reconcile the harness against six explicit surfaces: relevant state writers, valuable consumers, callback programs, actor capabilities, lifecycle transitions, and numerical boundaries. Mark each item represented, missing, unknown, or not applicable. Completeness of the map itself remains an explicit unknown when dispatch, dependencies, callbacks, or writer discovery are unresolved.
+
+Collect action attempts, precondition failures, reached state fingerprints, and replay outcomes from real runs. A missing action, excessive precondition rejection, or repeated-state loop creates a bounded harness-expansion task. Resolve that task only with a real run and clean replay showing the new surface; adding a handler in prose or source alone is not coverage.
+
 ## Run, replay, and interpret
 
 Preserve seed, corpus, configuration, tool version, resource budget, and exact command in a `$a1x-runtime` fuzz-class run and immutable artifacts. Emit CoverageGap, StatePrefix, FailedExperiment, or TransactionWitness evidence as appropriate. Replay minimized sequences deterministically in Foundry. Inspect the first semantic divergence, then route the minimized witness to `$a1x-execute` and `$a1x-validate`.
 
-If a campaign stalls, determine whether the problem is handler reachability, over-restrictive assumptions, a weak waypoint, dependency fidelity, or an unsuitable tool. Do not simply multiply runtime.
+If a campaign stalls, determine whether the problem is handler reachability, over-restrictive assumptions, a weak waypoint, dependency fidelity, or an unsuitable tool. Use runtime harness telemetry to select the smallest missing surface, expand it under a bounded budget, and replay the resulting sequence. Do not simply multiply runtime.
 
 ## Output contract
 

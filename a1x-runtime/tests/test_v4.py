@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from a1x_runtime import records
+from a1x_runtime.benchmark import attach_benchmark_trial, compare_benchmark, create_benchmark_suite
 from a1x_runtime.artifacts import ingest_artifact, verify_artifact
 from a1x_runtime.atomic import read_json, write_json_atomic
 from a1x_runtime.blind_review import (
@@ -20,7 +21,7 @@ from a1x_runtime.campaign import init_campaign, migrate_campaign
 from a1x_runtime.evidence import normalize_evidence_refs
 from a1x_runtime.evidence_bundles import create_bundle, verify_bundle
 from a1x_runtime.errors import StateTransitionError, ValidationError
-from a1x_runtime.evaluation import evaluation_summary, record_trial
+from a1x_runtime.evaluation import adjudicate_trial, evaluation_summary, record_trial
 from a1x_runtime.mcp_server import dispatch
 from a1x_runtime.modern_evm import context_template, validate_execution_context
 from a1x_runtime.operations import propose_operation, transition_operation
@@ -31,6 +32,7 @@ from a1x_runtime.records import (
     require_campaign,
     verify_event_chain,
 )
+from a1x_runtime.scheduling import record_lineage_attempts, scheduling_state, select_fair_lineages
 from a1x_runtime.rsa import (
     assess_semantic_delta,
     build_compatibility_graph,
@@ -288,6 +290,11 @@ class A1XV4Test(unittest.TestCase):
                 "phases": phases,
                 "signals": [{"kind": "invariant-drift", "value": "-1", "unit": "D", "evidence_artifact": "trace.txt"}],
             },
+            "reachability_guard": {
+                "artificial_prerequisite": False,
+                "predicate": "reserve compression",
+                "writer_paths": [{"actor": "public swapper", "target": "pool reserve", "direction": "decrease", "status": "possible", "non_privileged": True, "evidence_artifact": "trace.txt"}],
+            },
             "next_action": "close reserve compression",
             "dimensions": {"evidence_level": "E3", "reachability": "medium", "security_consequence": "high", "state_novelty": "high", "next_test_cost": "medium"},
             "runtime_verification": {
@@ -406,6 +413,7 @@ class A1XV4Test(unittest.TestCase):
         conditional = self._closure_handoff("LANE-0001", "LINEAGE-conditional", phase="trigger")
         conditional["witness"]["source_faithful"] = False
         conditional["witness"]["setup_taint"] = "attack-path"
+        conditional["reachability_guard"]["artificial_prerequisite"] = True
         self.assertEqual(witness_progress(conditional)[0], -1)
         self.assertTrue(needs_reachability_closure(conditional))
         self.assertFalse(needs_witness_closure(conditional))
@@ -505,7 +513,7 @@ class A1XV4Test(unittest.TestCase):
 
     def test_mcp_facade_has_no_private_runtime_state(self) -> None:
         response = dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-        self.assertEqual(response["result"]["serverInfo"]["version"], "4.3.0")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "4.4.0")
         tools = dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         tool_names = {tool["name"] for tool in tools["result"]["tools"]}
         self.assertIn("campaign_show", tool_names)
@@ -529,6 +537,74 @@ class A1XV4Test(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "requires linked evidence"):
             record_trial(self.root, incident="incident-2", configuration="v4.4", outcome="replayable-witness", costs=costs, evidence_id=None, notes="invalid")
 
+    def test_attempt_aware_fairness_and_operational_allowance(self) -> None:
+        first = select_fair_lineages(
+            self.root,
+            candidates=[
+                {"lineage_id": "LINEAGE-a", "priority": [1]},
+                {"lineage_id": "LINEAGE-b", "priority": [9]},
+            ],
+            slots=1,
+            generation=1,
+        )
+        self.assertEqual(first, ["LINEAGE-b"])
+        record_lineage_attempts(self.root, generation=1, outcomes=[{
+            "lineage_id": "LINEAGE-b", "operational_failure": True,
+            "semantic_progress": False, "witness_progress": False, "information_progress": False,
+        }])
+        second = select_fair_lineages(
+            self.root,
+            candidates=[
+                {"lineage_id": "LINEAGE-a", "priority": [1]},
+                {"lineage_id": "LINEAGE-b", "priority": [9]},
+            ],
+            slots=1,
+            generation=2,
+        )
+        self.assertEqual(second, ["LINEAGE-a"])
+        state = scheduling_state(self.root)
+        self.assertEqual(state["lineages"]["LINEAGE-b"]["research_attempts"], 0)
+        self.assertEqual(state["lineages"]["LINEAGE-b"]["operational_failures"], 1)
+
+    def test_three_profile_equal_budget_benchmark_requires_adjudication(self) -> None:
+        budget = {"wall_seconds": 100, "cpu_core_seconds": 200, "peak_memory_bytes": 10000, "llm_input_tokens": 1000, "llm_output_tokens": 500, "rpc_requests": 100, "evm_executions": 10000}
+        costs = {"wall_seconds": 10, "cpu_core_seconds": 20, "peak_memory_bytes": 1000, "llm_input_tokens": 100, "llm_output_tokens": 50, "rpc_requests": 10, "evm_executions": 1000}
+        suite = create_benchmark_suite(self.root, {
+            "name": "frozen-integrity-full",
+            "incidents": ["held-out-incident"],
+            "controlled_variables": {
+                "model": "same-model",
+                "target_information": "same-package",
+                "tools": "same-installed-capabilities",
+                "chain_block": "chain-1-block-20000000",
+                "attacker_model": "unprivileged",
+            },
+            "resource_budget": budget,
+            "v4_commit": "working-tree",
+            "held_out_required": True,
+        })
+        evidence = self._bundle("benchmark-adjudication")
+        outcomes = {
+            "v4.3.0-frozen": "near-miss",
+            "v4.4.0-integrity": "replayable-witness",
+            "v4.4.0-full": "validated-root-cause",
+        }
+        for configuration, outcome in outcomes.items():
+            trial = record_trial(
+                self.root,
+                incident="held-out-incident",
+                configuration=configuration,
+                outcome=outcome,
+                costs=costs,
+                evidence_id=evidence["id"] if outcome != "near-miss" else None,
+                notes="equal-envelope regression fixture",
+            )
+            adjudicate_trial(self.root, trial_id=trial["id"], outcome=outcome, evidence_id=evidence["id"], notes="independent fixture adjudication")
+            attach_benchmark_trial(self.root, benchmark_id=suite["id"], trial_id=trial["id"])
+        compared = compare_benchmark(self.root, suite["id"])
+        self.assertTrue(compared["valid"], compared["errors"])
+        self.assertEqual(compared["metrics"]["v4.4.0-full"]["validated_root_causes"], 1)
+
 
 class MigrationTest(unittest.TestCase):
     def test_explicit_legacy_migration_preserves_old_bytes(self) -> None:
@@ -543,6 +619,33 @@ class MigrationTest(unittest.TestCase):
             result = migrate_campaign(root)
             self.assertTrue(result["migrated"])
             self.assertTrue((root / "events.jsonl").read_bytes().startswith(legacy))
+            self.assertTrue(verify_event_chain(root)["valid"])
+
+    def test_v43_to_v44_migration_is_additive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source = base / "source"
+            source.mkdir()
+            (source / "Target.sol").write_text("contract Target {}\n", encoding="utf-8")
+            root = base / "campaign"
+            init_campaign(
+                root, label="v43", source=source, target="Target", chain_id=1,
+                block_number=20_000_000, rpc_env="MAINNET_RPC_URL", authorization="local test",
+                budgets={"max_runs": 20, "max_scale_lanes": 20, "max_parallel": 2, "default_run_timeout_seconds": 60, "default_output_bytes": 100000},
+            )
+            campaign = read_json(root / "campaign.json")
+            campaign["runtime_version"] = "4.3.0"
+            write_json_atomic(root / "campaign.json", campaign)
+            preserved = root / "orchestration" / "v43-preserved.json"
+            preserved.write_bytes(b'{"kind":"frozen-v43-record","value":7}\n')
+            before = preserved.read_bytes()
+            result = migrate_campaign(root)
+            self.assertTrue(result["migrated"])
+            self.assertEqual(result["migration"]["from_runtime_version"], "4.3.0")
+            self.assertEqual(result["campaign"]["runtime_version"], "4.4.0")
+            self.assertEqual(preserved.read_bytes(), before)
+            self.assertTrue((root / "harnesses").is_dir())
+            self.assertTrue((root / "orchestration" / "features.json").is_file())
             self.assertTrue(verify_event_chain(root)["valid"])
 
 

@@ -11,7 +11,7 @@ Run `doctor` for machine inventory and `capability probe` for the current target
 | Narrow arithmetic/path constraint | Halmos/Z3 or Echidna symbolic mode |
 | Deployed-state/snapshot exploration | ItyFuzz, when compatible |
 
-Never claim cross-engine independence merely because two tools agree: Wake and Foundry can share `revm`. Native corpora are supporting artifacts, not interchangeable state. Translate a useful result into a typed witness and replay it through Foundry.
+Never claim cross-engine independence merely because two tools agree: Wake and Foundry can share `revm`. Native corpora are supporting artifacts, not interchangeable state. Translate a useful result into a typed witness and replay it through Foundry. The runtime directly executes bounded Python exact-integer and isolated Python-Z3 jobs. Halmos, Medusa, Echidna, ItyFuzz, and Wake are admitted only after the per-target capability probe and a real sealed run; uninstalled or target-incompatible adapters are not represented by placeholders.
 
 Use the read-only UDS prestate service for immutable recon queries. For iterative exploit construction, use the lane's independent writable fork through `a1x-lane-fork exec -- ... @fork`. The wrapper starts a short-lived HTTP bridge in the same network namespace as the child command, so Forge, Cast, Wake, Echidna, or Medusa can use ordinary HTTP without receiving an upstream credential. The host supervisor proxies and caches pinned upstream reads, and the UDS relay allows local EVM mutation while rejecting fork reset, upstream retargeting, and node-metadata methods.
 

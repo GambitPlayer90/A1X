@@ -59,7 +59,7 @@ def dispatch(request: dict[str, Any], socket_path: Path) -> dict[str, Any] | Non
             result={
                 "protocolVersion": "2025-06-18",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "a1x-lane-fork", "version": "4.3.0"},
+                "serverInfo": {"name": "a1x-lane-fork", "version": "4.4.0"},
             },
         )
     if method == "tools/list":

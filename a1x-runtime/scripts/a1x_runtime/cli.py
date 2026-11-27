@@ -12,6 +12,7 @@ from .adapters import capability_matrix, probe_target
 from .artifacts import ingest_artifact, materialize_artifact, verify_artifact
 from .actor_programs import create_actor_program, record_actor_execution, verify_actor_execution
 from .blind_review import execute_blind_review, prepare_blind_review
+from .benchmark import attach_benchmark_trial, compare_benchmark, create_benchmark_suite
 from .campaign import add_hypothesis, add_obligation, doctor, init_campaign, migrate_campaign, save_doctor, show_campaign
 from .candidates import add_review, check_gates, create_candidate, promote_validated
 from .controller import (
@@ -31,19 +32,22 @@ from .errors import A1XError
 from .evidence_bundles import create_bundle, load_bundle, verify_bundle
 from .explorer import retrieve_verified_contract, show_retrieval
 from .evaluation import adjudicate_trial, evaluation_summary, record_trial
-from .features import feature_record, set_feature
+from .features import apply_profile, feature_record, set_feature
 from .forks import fork_status, revert_fork, snapshot_fork, start_fork, stop_fork
+from .harness_coverage import create_expansion_task, create_harness_model, record_harness_telemetry, resolve_expansion_task, verify_harness_model
 from .replay import prepare_replay, verify_replay
 from .operations import propose_operation, recommend_next, transition_operation
 from .mcp_server import serve_stdio
 from .prestate import serve_http_bridge, serve_proxy
 from .prerequisite_graph import create_backtrack_branch, create_prerequisite_graph, resolve_backtrack_branch, verify_prerequisite_graph
 from .recon import active_recon, create_recon_pack
+from .research_progress import record_progress, verify_progress
 from .records import verify_event_chain
 from .rsa import build_compatibility_graph, create_evidence_round
 from .runs import execute_run, observe_run, plan_run
 from .scale import aggregate_round, auto_select_frontier, create_recombination_round, create_round, evolve_population, run_round, select_frontier
 from .security_oracles import create_security_oracle, evaluate_security_oracle, standard_oracle_profile, verify_oracle_evaluation
+from .scheduling import resource_snapshot, scheduling_state
 from .solver_adapters import create_solver_job, probe_solver_tools, register_external_solver_job, validate_solver_job, verify_solver_job
 from .surface_graph import build_surface_graph
 from .trace_facts import analyze_run_trace
@@ -251,6 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
     features_set.add_argument("--name", required=True)
     features_set.add_argument("--enabled", choices=["yes", "no"], required=True)
     features_set.set_defaults(handler=lambda a: set_feature(a.root, name=a.name, enabled=a.enabled == "yes"))
+    features_profile = features_sub.add_parser("profile")
+    features_profile.add_argument("--root", required=True, type=_root)
+    features_profile.add_argument("--name", choices=["v4.3.0-frozen", "v4.4.0-integrity", "v4.4.0-full"], required=True)
+    features_profile.set_defaults(handler=lambda a: apply_profile(a.root, name=a.name))
 
     continuation = commands.add_parser("continuation", help="manage executable parent-to-child continuation contracts")
     continuation_sub = continuation.add_subparsers(dest="continuation_command", required=True)
@@ -386,6 +394,79 @@ def build_parser() -> argparse.ArgumentParser:
     solver_verify.add_argument("--root", required=True, type=_root)
     solver_verify.add_argument("--solver-job", required=True)
     solver_verify.set_defaults(handler=lambda a: verify_solver_job(a.root, a.solver_job))
+
+    progress = commands.add_parser("progress", help="record evidence-bound witness and information progress")
+    progress_sub = progress.add_subparsers(dest="progress_command", required=True)
+    progress_record = progress_sub.add_parser("record")
+    progress_record.add_argument("--root", required=True, type=_root)
+    progress_record.add_argument("--json", required=True, type=_root)
+    progress_record.set_defaults(handler=lambda a: record_progress(a.root, _load_json(a.json)))
+    progress_verify = progress_sub.add_parser("verify")
+    progress_verify.add_argument("--root", required=True, type=_root)
+    progress_verify.add_argument("--progress", required=True)
+    progress_verify.set_defaults(handler=lambda a: verify_progress(a.root, a.progress))
+
+    harness = commands.add_parser("harness", help="measure protocol-surface representation and bounded harness expansion")
+    harness_sub = harness.add_subparsers(dest="harness_command", required=True)
+    harness_create = harness_sub.add_parser("create")
+    harness_create.add_argument("--root", required=True, type=_root)
+    harness_create.add_argument("--json", required=True, type=_root)
+    harness_create.set_defaults(handler=lambda a: create_harness_model(a.root, _load_json(a.json)))
+    harness_task = harness_sub.add_parser("expand")
+    harness_task.add_argument("--root", required=True, type=_root)
+    harness_task.add_argument("--harness", required=True)
+    harness_task.add_argument("--item", required=True)
+    harness_task.add_argument("--reason", required=True)
+    harness_task.add_argument("--experiment", required=True)
+    harness_task.add_argument("--maximum-executions", type=int, required=True)
+    harness_task.set_defaults(handler=lambda a: create_expansion_task(a.root, harness_id=a.harness, item_id=a.item, reason=a.reason, experiment=a.experiment, maximum_executions=a.maximum_executions))
+    harness_telemetry = harness_sub.add_parser("telemetry")
+    harness_telemetry.add_argument("--root", required=True, type=_root)
+    harness_telemetry.add_argument("--harness", required=True)
+    harness_telemetry.add_argument("--run", required=True)
+    harness_telemetry.add_argument("--replay", required=True)
+    harness_telemetry.add_argument("--action-stats", required=True, type=_root)
+    harness_telemetry.add_argument("--state-fingerprint", action="append", default=[])
+    harness_telemetry.add_argument("--evidence-ref", action="append", default=[])
+    harness_telemetry.set_defaults(handler=lambda a: record_harness_telemetry(a.root, harness_id=a.harness, run_id=a.run, replay_id=a.replay, action_stats=_load_json(a.action_stats), state_fingerprints=a.state_fingerprint, evidence_refs=_evidence_refs(a.evidence_ref)))
+    harness_resolve = harness_sub.add_parser("resolve")
+    harness_resolve.add_argument("--root", required=True, type=_root)
+    harness_resolve.add_argument("--task", required=True)
+    harness_resolve.add_argument("--status", choices=["executed", "refuted", "blocked"], required=True)
+    harness_resolve.add_argument("--resolution", required=True)
+    harness_resolve.add_argument("--run")
+    harness_resolve.add_argument("--replay")
+    harness_resolve.add_argument("--evidence-ref", action="append", default=[])
+    harness_resolve.set_defaults(handler=lambda a: resolve_expansion_task(a.root, task_id=a.task, status=a.status, resolution=a.resolution, run_id=a.run, replay_id=a.replay, evidence_refs=_evidence_refs(a.evidence_ref)))
+    harness_verify = harness_sub.add_parser("verify")
+    harness_verify.add_argument("--root", required=True, type=_root)
+    harness_verify.add_argument("--harness", required=True)
+    harness_verify.set_defaults(handler=lambda a: verify_harness_model(a.root, a.harness))
+
+    scheduling = commands.add_parser("scheduling", help="inspect fair lineage allocation and aggregate resource use")
+    scheduling_sub = scheduling.add_subparsers(dest="scheduling_command", required=True)
+    scheduling_show = scheduling_sub.add_parser("show")
+    scheduling_show.add_argument("--root", required=True, type=_root)
+    scheduling_show.set_defaults(handler=lambda a: scheduling_state(a.root))
+    scheduling_resources = scheduling_sub.add_parser("resources")
+    scheduling_resources.add_argument("--root", required=True, type=_root)
+    scheduling_resources.set_defaults(handler=lambda a: resource_snapshot(a.root))
+
+    benchmark = commands.add_parser("benchmark", help="compare frozen, integrity-only, and full policies under one resource envelope")
+    benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
+    benchmark_create = benchmark_sub.add_parser("create")
+    benchmark_create.add_argument("--root", required=True, type=_root)
+    benchmark_create.add_argument("--json", required=True, type=_root)
+    benchmark_create.set_defaults(handler=lambda a: create_benchmark_suite(a.root, _load_json(a.json)))
+    benchmark_attach = benchmark_sub.add_parser("attach")
+    benchmark_attach.add_argument("--root", required=True, type=_root)
+    benchmark_attach.add_argument("--benchmark", required=True)
+    benchmark_attach.add_argument("--trial", required=True)
+    benchmark_attach.set_defaults(handler=lambda a: attach_benchmark_trial(a.root, benchmark_id=a.benchmark, trial_id=a.trial))
+    benchmark_compare = benchmark_sub.add_parser("compare")
+    benchmark_compare.add_argument("--root", required=True, type=_root)
+    benchmark_compare.add_argument("--benchmark", required=True)
+    benchmark_compare.set_defaults(handler=lambda a: compare_benchmark(a.root, a.benchmark))
 
     recon = commands.add_parser("recon", help="manage immutable versioned Recon Packs")
     recon_sub = recon.add_subparsers(dest="recon_command", required=True)
@@ -805,6 +886,7 @@ def build_parser() -> argparse.ArgumentParser:
     scale_evolve.add_argument("--root", required=True, type=_root)
     scale_evolve.add_argument("--parent-round", required=True)
     scale_evolve.add_argument("--generations", type=int, default=3)
+    scale_evolve.add_argument("--adaptive-extra-generations", type=int, default=3)
     scale_evolve.add_argument("--children", type=int, default=3)
     scale_evolve.add_argument("--fresh-lanes", type=int, default=1)
     scale_evolve.add_argument("--closure-lanes", type=int, default=1)
@@ -828,6 +910,7 @@ def build_parser() -> argparse.ArgumentParser:
             a.root,
             parent_round=a.parent_round,
             generations=a.generations,
+            adaptive_extra_generations=a.adaptive_extra_generations,
             children=a.children,
             fresh_lanes=a.fresh_lanes,
             closure_lanes=a.closure_lanes,

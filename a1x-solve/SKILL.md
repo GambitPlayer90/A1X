@@ -35,13 +35,15 @@ Read [semantic-fidelity.md](references/semantic-fidelity.md). Match Solidity/EVM
 6. Use SMT or symbolic testing for exact path predicates and bounded domains. Python Z3 dependencies may be installed or used when the concrete encoding requires them; pin and record the version and keep the solver environment separate from target build hooks.
 7. Use heuristic/global search for discontinuous mixed objectives, retaining multiple candidates.
 
+Use the runtime's exact-integer and isolated Z3 adapters for bounded solver jobs so versions, domains, inputs, outputs, and resource use are retained. Register Halmos, Medusa, Echidna, ItyFuzz, Wake, or another specialist only after its binary is installed, its target capability has been checked, and an actual sealed run produced evidence. Do not create placeholder adapters or count tool availability as solver evidence.
+
 Read [numeric-search.md](references/numeric-search.md) for economic objectives.
 
 For reserve compression, repeated rounding drift, iterative AMM math, or revert-heavy fixed-point cliffs, read [staged-fixed-point-search.md](references/staged-fixed-point-search.md). Preserve the latest reached prefix, solve the first missing phase with an exact integer mirror and bounded revert-aware search, then continue through settlement and internal-ledger realization. Do not optimize end-to-end token profit while the local invariant violation is still below an unresolved state-construction edge.
 
 ## Validate and falsify
 
-Record the solver job as a `$a1x-runtime` solve-class run. For each solution, run the original concrete target/harness at boundary neighbors and at least one negative point. If execution disagrees, inspect the first model divergence and revise the encoding. Do not weaken the target or silently widen actor capabilities to fit a solver witness.
+Record the solver job as a `$a1x-runtime` solve-class run. For each solution, run the original concrete target/harness at boundary neighbors and at least one negative point. Bind a solver witness to that observed run and its clean replay before the runtime may treat it as validated. If execution disagrees, inspect the first model divergence and revise the encoding. Do not weaken the target or silently widen actor capabilities to fit a solver witness.
 
 ## Output contract
 
