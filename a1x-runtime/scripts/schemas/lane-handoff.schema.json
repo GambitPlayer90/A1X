@@ -137,6 +137,29 @@
       },
       "required": ["bug_class", "source_faithful", "setup_taint", "phases", "signals"]
     },
+    "continuation_replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": {"type": "boolean"},
+        "parent_manifests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "label": {"type": "string"},
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+            },
+            "required": ["label", "sha256"]
+          }
+        },
+        "parent_replayed": {"type": "boolean"},
+        "assertions_preserved": {"type": "boolean"},
+        "replay_artifact": {"type": "string"}
+      },
+      "required": ["required", "parent_manifests", "parent_replayed", "assertions_preserved", "replay_artifact"]
+    },
     "next_action": {"type": "string"},
     "dimensions": {
       "type": "object",
@@ -151,5 +174,5 @@
       "required": ["evidence_level", "reachability", "security_consequence", "state_novelty", "next_test_cost"]
     }
   },
-  "required": ["lane_id", "status", "mechanism", "mechanism_family", "consumer", "tested_obligation", "discriminator", "causal_identity", "causal_anchors", "attacker_fingerprint", "state_fingerprint", "impact_stage", "terminal_impact", "execution", "blocker", "evidence", "artifacts", "refutations", "prerequisites", "witness", "next_action", "dimensions"]
+  "required": ["lane_id", "status", "mechanism", "mechanism_family", "consumer", "tested_obligation", "discriminator", "causal_identity", "causal_anchors", "attacker_fingerprint", "state_fingerprint", "impact_stage", "terminal_impact", "execution", "blocker", "evidence", "artifacts", "refutations", "unresolved", "prerequisites", "witness", "continuation_replay", "next_action", "dimensions"]
 }

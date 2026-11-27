@@ -24,10 +24,12 @@ from .controller import (
     resolve_frontier,
     resolve_impact,
 )
+from .continuity import create_continuation_contract, record_continuation_attempt, verify_continuation_contract
 from .errors import A1XError
 from .evidence_bundles import create_bundle, load_bundle, verify_bundle
 from .explorer import retrieve_verified_contract, show_retrieval
-from .evaluation import evaluation_summary, record_trial
+from .evaluation import adjudicate_trial, evaluation_summary, record_trial
+from .features import feature_record, set_feature
 from .forks import fork_status, revert_fork, snapshot_fork, start_fork, stop_fork
 from .replay import prepare_replay, verify_replay
 from .operations import propose_operation, recommend_next, transition_operation
@@ -232,6 +234,33 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_verify.add_argument("--evidence", required=True)
     evidence_verify.set_defaults(handler=lambda a: verify_bundle(a.root, a.evidence))
 
+    features = commands.add_parser("features", help="inspect or change v4.4 runtime feature flags")
+    features_sub = features.add_subparsers(dest="features_command", required=True)
+    features_show = features_sub.add_parser("show")
+    features_show.add_argument("--root", required=True, type=_root)
+    features_show.set_defaults(handler=lambda a: feature_record(a.root))
+    features_set = features_sub.add_parser("set")
+    features_set.add_argument("--root", required=True, type=_root)
+    features_set.add_argument("--name", required=True)
+    features_set.add_argument("--enabled", choices=["yes", "no"], required=True)
+    features_set.set_defaults(handler=lambda a: set_feature(a.root, name=a.name, enabled=a.enabled == "yes"))
+
+    continuation = commands.add_parser("continuation", help="manage executable parent-to-child continuation contracts")
+    continuation_sub = continuation.add_subparsers(dest="continuation_command", required=True)
+    continuation_create = continuation_sub.add_parser("create")
+    continuation_create.add_argument("--root", required=True, type=_root)
+    continuation_create.add_argument("--json", required=True, type=_root)
+    continuation_create.set_defaults(handler=lambda a: create_continuation_contract(a.root, _load_json(a.json)))
+    continuation_verify = continuation_sub.add_parser("verify")
+    continuation_verify.add_argument("--root", required=True, type=_root)
+    continuation_verify.add_argument("--continuation", required=True)
+    continuation_verify.set_defaults(handler=lambda a: verify_continuation_contract(a.root, a.continuation))
+    continuation_attempt = continuation_sub.add_parser("attempt")
+    continuation_attempt.add_argument("--root", required=True, type=_root)
+    continuation_attempt.add_argument("--continuation", required=True)
+    continuation_attempt.add_argument("--json", required=True, type=_root)
+    continuation_attempt.set_defaults(handler=lambda a: record_continuation_attempt(a.root, a.continuation, _load_json(a.json)))
+
     recon = commands.add_parser("recon", help="manage immutable versioned Recon Packs")
     recon_sub = recon.add_subparsers(dest="recon_command", required=True)
     recon_create = recon_sub.add_parser("create")
@@ -323,6 +352,13 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_record.add_argument("--evidence")
     evaluate_record.add_argument("--notes", default="")
     evaluate_record.set_defaults(handler=lambda a: record_trial(a.root, incident=a.incident, configuration=a.configuration, outcome=a.outcome, costs=_load_json(a.costs), evidence_id=a.evidence, notes=a.notes))
+    evaluate_adjudicate = evaluate_sub.add_parser("adjudicate")
+    evaluate_adjudicate.add_argument("--root", required=True, type=_root)
+    evaluate_adjudicate.add_argument("--trial", required=True)
+    evaluate_adjudicate.add_argument("--outcome", required=True)
+    evaluate_adjudicate.add_argument("--evidence", required=True)
+    evaluate_adjudicate.add_argument("--notes", default="")
+    evaluate_adjudicate.set_defaults(handler=lambda a: adjudicate_trial(a.root, trial_id=a.trial, outcome=a.outcome, evidence_id=a.evidence, notes=a.notes))
     evaluate_summary_parser = evaluate_sub.add_parser("summary")
     evaluate_summary_parser.add_argument("--root", required=True, type=_root)
     evaluate_summary_parser.set_defaults(handler=lambda a: evaluation_summary(a.root))

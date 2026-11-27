@@ -16,12 +16,19 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from a1x_runtime.campaign import init_campaign
+from a1x_runtime.campaign import add_hypothesis, add_obligation, init_campaign
+from a1x_runtime.continuity import (
+    create_continuation_contract,
+    record_continuation_attempt,
+    verify_continuation_contract,
+)
 from a1x_runtime.errors import ValidationError
 from a1x_runtime.explorer import retrieve_verified_contract
 from a1x_runtime.forks import start_fork, stop_fork
 from a1x_runtime.rpc import rpc_call
 from a1x_runtime.rpc_broker import uds_call
+from a1x_runtime.replay import prepare_replay, verify_replay
+from a1x_runtime.runs import execute_run, observe_run, plan_run
 from a1x_runtime.scale import create_round, run_round
 
 
@@ -134,6 +141,183 @@ class BrokerIntegrationTest(unittest.TestCase):
             self.assertTrue(result["stopped"])
             self.assertFalse(Path(record["socket"]).exists())
 
+    def test_real_anvil_checkpoint_and_waypoint_continuation(self) -> None:
+        script = self.source / "rpc_trace.py"
+        script.write_text(
+            """import json, os, time, urllib.request
+url = os.environ['A1X_TEST_RPC_URL']
+counter = 0
+def rpc(method, params):
+    global counter
+    counter += 1
+    body = json.dumps({'jsonrpc':'2.0','id':counter,'method':method,'params':params}).encode()
+    request = urllib.request.Request(url, data=body, headers={'content-type':'application/json'})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        value = json.loads(response.read())
+    if 'error' in value:
+        raise RuntimeError(value['error'])
+    return value['result']
+snapshot = rpc('evm_snapshot', [])
+sender = rpc('eth_accounts', [])[0]
+init = '0x6006600c60003960066000f3600160005500'
+created = rpc('eth_sendTransaction', [{'from':sender,'data':init,'gas':'0x100000'}])
+receipt = rpc('eth_getTransactionReceipt', [created])
+for _ in range(100):
+    if receipt:
+        break
+    time.sleep(0.01)
+    receipt = rpc('eth_getTransactionReceipt', [created])
+address = receipt['contractAddress']
+called = rpc('eth_sendTransaction', [{'from':sender,'to':address,'gas':'0x100000'}])
+called_receipt = rpc('eth_getTransactionReceipt', [called])
+for _ in range(100):
+    if called_receipt:
+        break
+    time.sleep(0.01)
+    called_receipt = rpc('eth_getTransactionReceipt', [called])
+trace = rpc('debug_traceTransaction', [called, {'disableMemory':True,'disableStack':False,'disableStorage':False}])
+print(json.dumps({'trace_ok':True,'transaction':called,'address':address,'trace':trace}, sort_keys=True))
+if not rpc('evm_revert', [snapshot]):
+    raise RuntimeError('snapshot revert failed')
+""",
+            encoding="utf-8",
+        )
+        obligation = add_obligation(
+            self.root,
+            title="slot update",
+            statement="the executable prefix stores one",
+            boundary="top-level transaction",
+            units="uint256",
+            oracle="trace contains SSTORE",
+        )
+        hypothesis = add_hypothesis(
+            self.root,
+            obligation_id=obligation["id"],
+            mechanism="call writes the declared slot",
+            sequence="deploy then call",
+            support_prediction="trace contains SSTORE",
+            refute_prediction="trace omits SSTORE",
+            next_action="replay",
+        )
+        planned = plan_run(
+            self.root,
+            hypothesis_id=hypothesis["id"],
+            run_class="candidate",
+            cwd=self.source,
+            argv=[sys.executable, "rpc_trace.py"],
+            timeout_seconds=30,
+            max_output_bytes=2_000_000,
+            inputs=[script],
+            property_statement="the executable prefix reaches SSTORE",
+            support_prediction="trace_ok is true",
+            refute_prediction="trace command fails",
+            success_regex='"trace_ok": true',
+            pass_env=["A1X_TEST_RPC_URL"],
+            inherit_env=[],
+            fork_id=None,
+        )
+        run_id = planned["run_id"]
+        receipt = execute_run(self.root, run_id)
+        self.assertTrue(
+            receipt["mechanical_success"],
+            (self.root / "runs" / run_id / "stderr.log").read_text(encoding="utf-8", errors="replace"),
+        )
+        observe_run(
+            self.root,
+            run_id,
+            outcome="supports",
+            property_violated=True,
+            observation="real Anvil trace reached SSTORE",
+            impact="fixture continuity only",
+            metrics=[],
+            limitations="local deterministic fixture",
+        )
+        replay_workspace = Path(self.temporary.name) / "continuation-replay"
+        prepare_replay(self.root, run_id=run_id, destination=replay_workspace)
+        replay = verify_replay(self.root, run_id=run_id, workspace=replay_workspace)
+        self.assertTrue(replay["passed"], replay)
+        run_ref = {"type": "run-receipt", "run_id": run_id, "outcome": "supports"}
+        base = {
+            "parent_run": run_id,
+            "parent_handoff": None,
+            "lineage_id": "LINEAGE-anvil-continuity",
+            "closure_mode": "witness",
+            "execution_topology": "atomic",
+            "actors": [{
+                "id": "attacker",
+                "role": "unprivileged caller",
+                "address": None,
+                "capabilities": ["send transaction"],
+                "authority_basis": "Anvil unlocked fixture account",
+            }],
+            "transactions": [{
+                "index": 0,
+                "actor": "attacker",
+                "action": "deploy and call trace fixture",
+                "boundary": "transaction",
+                "expected_effects": ["SSTORE executes"],
+                "obligations_created": [],
+            }],
+            "assertions": [{
+                "id": "prefix-sstore",
+                "predicate": "trace contains SSTORE",
+                "expected": "true",
+                "scope": "parent top-level replay",
+                "required": True,
+                "evidence_refs": [run_ref],
+            }],
+            "preserve_assertions": ["prefix-sstore"],
+            "selected_prerequisite": {
+                "id": "PREREQ-next",
+                "predicate": "extend after SSTORE",
+                "success_condition": "new assertion executes",
+                "artificial": False,
+                "dependencies": [],
+            },
+            "reachability": {"predicate": "prefix is public", "writer_paths": []},
+        }
+        checkpoint_payload = dict(base)
+        checkpoint_payload["checkpoint"] = {
+            "kind": "transaction-checkpoint",
+            "transaction_index": 0,
+            "waypoint": None,
+        }
+        checkpoint = create_continuation_contract(self.root, checkpoint_payload)
+        self.assertTrue(verify_continuation_contract(self.root, checkpoint["id"])["valid"])
+        trace_ref = {"type": "trace-artifact", "run_id": run_id, "path": "stdout.log"}
+        waypoint_payload = json.loads(json.dumps(base))
+        waypoint_payload["execution_topology"] = "nested-atomic"
+        waypoint_payload["checkpoint"] = {
+            "kind": "transaction-waypoint",
+            "transaction_index": 0,
+            "waypoint": {
+                "frame_path": [],
+                "program_counter": 4,
+                "occurrence": 1,
+                "description": "SSTORE inside the top-level call",
+                "evidence_refs": [trace_ref],
+            },
+        }
+        waypoint = create_continuation_contract(self.root, waypoint_payload)
+        self.assertTrue(verify_continuation_contract(self.root, waypoint["id"])["valid"])
+        attempt = record_continuation_attempt(
+            self.root,
+            checkpoint["id"],
+            {
+                "replay_id": replay["id"],
+                "result": "advanced",
+                "assertions": [{
+                    "id": "prefix-sstore",
+                    "passed": True,
+                    "observed": "SSTORE remained present",
+                    "evidence_refs": [{"type": "replay", "replay_id": replay["id"]}],
+                }],
+                "prerequisite_observation": "parent prefix reproduced",
+                "next_action": "extend the next edge",
+            },
+        )
+        self.assertEqual(attempt["result"], "advanced")
+
     def test_scale_lane_receives_tools_wake_mcp_and_no_upstream_secret(self) -> None:
         capabilities = self.root / "capabilities" / "capabilities.json"
         capabilities.write_text(json.dumps({
@@ -184,6 +368,9 @@ handoff = {
  'blocker':{'prerequisite':'blind target authorization','resolution_condition':'operator starts blind test','evidence_artifact':'environment-check.txt'},
  'evidence':[{'claim':'lane isolation is usable','observation':'tools, Wake MCP config, and fork UDS verified','artifact':'environment-check.txt'}],
  'artifacts':['environment-check.txt'],'refutations':[],'unresolved':['blind target not started'],'next_action':'await operator blind-test instruction',
+ 'prerequisites':[{'id':'','description':'blind target not started','kind':'environment','status':'open','resolution_condition':'operator starts blind test','evidence_artifact':''}],
+ 'witness':{'bug_class':'other','source_faithful':False,'setup_taint':'unknown','phases':[{'id':phase,'status':'open','property':'','evidence_artifact':''} for phase in ('prepare','trigger','persist','impact')],'signals':[]},
+ 'continuation_replay':{'required':False,'parent_manifests':[],'parent_replayed':False,'assertions_preserved':False,'replay_artifact':''},
  'dimensions':{'evidence_level':'E1','reachability':'high','security_consequence':'unknown','state_novelty':'low','next_test_cost':'low'}
 }
 out.write_text(json.dumps(handoff))

@@ -27,6 +27,7 @@ from .witness import (
     OPEN_PREREQUISITE_STATES,
     canonicalize_prerequisites,
     canonicalize_witness,
+    closure_mode,
     closed_prerequisite_ids,
     composition_lineage_id,
     fresh_lineage_id,
@@ -124,6 +125,7 @@ Requirements:
 - Identify the tested obligation and discriminator. Provide human-readable writer/guard/consumer/state/property identity, a stable `attacker_fingerprint`, `state_fingerprint`, artifact anchors for each component, and the ordered transition sequence. The attacker-model and state-shape anchors must be dedicated one-line artifacts whose text exactly equals those two fingerprints. Use exact `path:line[:end]` source regions or execution/trace artifacts; coarse, generic, or mismatched actor/state anchors remain unique and are never used to discard another lead.
 - Track witness construction explicitly. Use the exact profile for the selected bug class: economic=`prepare,trigger,persist,settle,realize,impact`; settlement=`prepare,trigger,persist,settle,impact`; authorization=`prepare,cross-authorization,consume-authority,impact`; governance=`prepare,acquire-influence,queue,execute,impact`; upgrade=`prepare,obtain-upgrade-authority,install-code,invoke,impact`; liveness=`prepare,block,persist,bound-recovery,impact`; other=`prepare,trigger,persist,impact`. Mark every phase and attach evidence to each reached phase. Record invariant/share-rate drift, internal credit, authorization crossing, persistent liveness failure, custody loss, and attacker net as separate phase-local signals. Never mark execution source-faithful when an exploit step relies on deal/storage/code mutation, privileged impersonation, or another unavailable capability.
 - Preserve inherited prerequisite IDs exactly. Close, narrow, or refute one only with an evidence artifact. Use an empty/new ID for a newly discovered prerequisite; the runtime assigns its stable ID. Do not split or rename blockers to manufacture progress.
+- Always populate `continuation_replay`. For a lane with `.a1x-parent-evidence`, hash every parent `manifest.json`, replay the inherited executable prefix before extending it, assert the inherited properties, and attach the replay log. For a lane without parents, set `required=false`, use an empty manifest array and replay artifact, and set both replay booleans false. A protected or recombination child is rejected unless parent replay and inherited assertions pass.
 - Attack intended usage. Deliberately construct attacker-controlled actors, identities, markets, tokens, callbacks, transaction boundaries, lifecycle interruptions, dust/empty/one-sided states, repeated cycles, alternate consumers, rounding thresholds, and governance/configuration denominators whenever relevant. A normal happy-path pass is not a security result.
 - A refutation must test the strongest reachable form of the mechanism and eliminate a necessary transition under the real attacker model. A revert, failed harness, ordinary-state test, intended-use argument, or absent current profit is inconclusive. A blocker must name the exact missing prerequisite, evidence artifact, and resolution condition. "Nothing found" is invalid.
 - Return only the structured handoff required by the output schema. Use lane_id exactly `{lane_id}`.
@@ -467,15 +469,16 @@ def _validate_handoff(
         "evidence",
         "artifacts",
         "refutations",
+        "unresolved",
+        "prerequisites",
+        "witness",
+        "continuation_replay",
         "next_action",
         "dimensions",
     }
     missing = sorted(required - set(data))
     if missing:
         raise IntegrityError(f"handoff missing fields: {', '.join(missing)}")
-    # `unresolved` is the legacy prose projection. Typed prerequisites are the
-    # authority in v4.3, but retaining this field keeps old campaigns readable.
-    data.setdefault("unresolved", [])
     if data["lane_id"] != lane_id:
         raise IntegrityError(f"handoff lane id mismatch: {data['lane_id']} != {lane_id}")
     if data["status"] not in {"candidate", "near-miss", "refuted", "blocked"}:
@@ -517,6 +520,37 @@ def _validate_handoff(
             raise IntegrityError("blocked handoff evidence artifact does not exist")
         if blocker_artifact not in evidence_artifacts:
             evidence_artifacts.append(blocker_artifact)
+
+    continuation = data.get("continuation_replay")
+    if not isinstance(continuation, dict):
+        raise IntegrityError("handoff continuation_replay must be an object")
+    protected_role = lane_role in {"witness-closure", "reachability-closure", "recombination", "evidence-recombination"}
+    if bool(continuation.get("required")) != protected_role:
+        raise IntegrityError("handoff continuation replay requirement does not match the lane role")
+    if protected_role:
+        if continuation.get("parent_replayed") is not True or continuation.get("assertions_preserved") is not True:
+            raise IntegrityError("protected child must replay its parents and preserve inherited assertions")
+        replay_artifact = str(continuation.get("replay_artifact", ""))
+        if _lane_artifact(path, replay_artifact) is None:
+            raise IntegrityError("protected child continuation replay artifact does not exist")
+        parent_root = path.parent / "parent-evidence"
+        expected = []
+        for manifest in sorted(parent_root.glob("*/manifest.json")):
+            expected.append({"label": manifest.parent.name, "sha256": file_sha256(manifest)})
+        supplied = sorted(
+            continuation.get("parent_manifests", []),
+            key=lambda item: str(item.get("label", "")) if isinstance(item, dict) else "",
+        )
+        if supplied != expected or not expected:
+            raise IntegrityError("protected child continuation manifest hashes do not match exported parents")
+    elif continuation != {
+        "required": False,
+        "parent_manifests": [],
+        "parent_replayed": False,
+        "assertions_preserved": False,
+        "replay_artifact": "",
+    }:
+        raise IntegrityError("independent lane continuation_replay must use the canonical empty value")
 
     refutation_deferred = False
     if (
@@ -1443,7 +1477,7 @@ def _semantic_delta_against_population(handoff: dict[str, Any], prior: list[dict
          for item in prior if _causal_edge_key(item) == _causal_edge_key(handoff)),
         default=-1,
     )
-    impact_rank = {"primitive": 0, "bounded": 1, "intermediate": 2, "terminal": 3}
+    impact_rank = {"primitive": 0, "bounded": 1, "consumer": 2, "terminal": 3}
     child_impact = 4 if handoff.get("terminal_impact") else impact_rank.get(str(handoff.get("impact_stage", "primitive")), 0)
     prior_impact = max(
         (4 if item.get("terminal_impact") else impact_rank.get(str(item.get("impact_stage", "primitive")), 0) for item in same_lineage),
@@ -1541,11 +1575,17 @@ def _export_parent_packet(root: Path, destination: Path, label: str, handoff: di
     anchors = handoff.get("causal_anchors", {})
     references.update(str(anchors.get(key, "")) for key in ("writer", "guard", "consumer", "state", "property", "attacker_model", "state_shape", "deployment"))
     references.update(str(item) for item in anchors.get("transition_sequence", []))
+    blocker = handoff.get("blocker", {})
+    references.add(str(blocker.get("evidence_artifact", "")))
+    references.update(str(item.get("evidence_artifact", "")) for item in prerequisite_records(handoff))
+    witness = handoff.get("witness", {})
+    references.update(str(item.get("evidence_artifact", "")) for item in witness.get("phases", []))
+    references.update(str(item.get("evidence_artifact", "")) for item in witness.get("signals", []))
     exported = []
     for reference in sorted(item for item in references if item):
         source = _lane_artifact(handoff_path, reference)
         if source is None or not source.is_file():
-            continue
+            raise IntegrityError(f"parent packet reference is missing or unsafe: {reference}")
         digest = file_sha256(source)
         target = files_dir / digest
         if not target.exists():
@@ -1553,7 +1593,12 @@ def _export_parent_packet(root: Path, destination: Path, label: str, handoff: di
             target.chmod(0o444)
         exported.append({"reference": reference, "sha256": digest, "file": f"files/{digest}"})
     write_json_atomic(packet / "handoff.json", handoff, mode=0o444)
-    manifest = {"origin_round": origin_round, "origin_lane_id": origin_lane, "files": exported}
+    manifest = {
+        "origin_round": origin_round,
+        "origin_lane_id": origin_lane,
+        "closure_mode": closure_mode(handoff),
+        "files": exported,
+    }
     write_json_atomic(packet / "manifest.json", manifest, mode=0o444)
     return manifest
 
@@ -1769,7 +1814,7 @@ def create_recombination_round(
 
     closure_by_lineage: dict[str, dict[str, Any]] = {}
     for handoff in eligible:
-        if not needs_witness_closure(handoff):
+        if closure_mode(handoff) is None:
             continue
         lineage_id = handoff_lineage_id(handoff)
         current = closure_by_lineage.get(lineage_id)
@@ -1811,9 +1856,18 @@ def create_recombination_round(
         prerequisites = [
             item for item in prerequisite_records(parent) if item.get("status") in OPEN_PREREQUISITE_STATES
         ]
-        base_prompt = f"""You are an A1X unary witness-closure lane. You have one parent and must deepen that exact lineage.
+        mode = closure_mode(parent)
+        role = "witness-closure" if mode == "witness" else "reachability-closure"
+        mode_instruction = (
+            "Replay the parent prefix first and extend its first open edge using attacker-reachable actions."
+            if mode == "witness"
+            else "Replay the conditional mechanism first, then replace its exact artificial prerequisite with permitted protocol actions. Keep the mechanism conditional until that replacement executes."
+        )
+        base_prompt = f"""You are an A1X unary {role} lane. You have one parent and must deepen that exact lineage.
 
 Do not switch targets, root causes, mechanism families, or valuable consumers. Reuse the read-only parent harness/evidence under `.a1x-parent-evidence/A`. Work on the first unresolved dependency in the shortest target-valid witness. Preserve every inherited prerequisite ID. Your valid outcomes are: advance an evidence-bound witness phase, narrow/resolve/refute an inherited prerequisite, produce a cleaner source-faithful harness, or establish a mechanism-specific impossibility proof. A new consumer or narrative without closure progress is not improvement.
+
+{mode_instruction} Preserve all previously demonstrated assertions. You may revise preparation amounts, ordering, or actor choices only when the inherited prefix reaches a dead end; after revision, re-execute every inherited assertion.
 
 For a rounding or iterative-math blocker, hold the latest reached prefix fixed; mirror exact integer math; sweep the inner boundary with revert-tolerant backoff; then search the outer compression/repetition count. Measure invariant/share-rate drift and protocol-internal credit before external profit, and continue through settlement/withdrawal when reached.
 
@@ -1823,7 +1877,7 @@ Open prerequisites:
 Parent:
 {json.dumps(parent, sort_keys=True, indent=2)}
 """
-        axis = f"witness-closure:{parent['lane_id']}"
+        axis = f"{role}:{parent['lane_id']}"
         write_text_atomic(
             lane_dir / "prompt.md",
             _lane_prompt(lane_id=lane_id, axis=axis, base_prompt=base_prompt, hypothesis_id=None),
@@ -1834,7 +1888,8 @@ Parent:
                 "axis": axis,
                 "status": "planned",
                 "path": f"lanes/{lane_id}",
-                "lane_role": "witness-closure",
+                "lane_role": role,
+                "closure_mode": mode,
                 "lineage_id": handoff_lineage_id(parent),
                 "parent_handoffs": [{"round_id": parent_round, "lane_id": parent["lane_id"]}],
                 "parent_artifacts": manifests,
@@ -1938,8 +1993,15 @@ def _update_lineage_stagnation(
         for item in semantic_deltas.values()
         if item.get("improved") is True
     }
-    lineages = {handoff_lineage_id(item) for item in [*prior, *children]}
-    for lineage_id in lineages:
+    known = {handoff_lineage_id(item) for item in [*prior, *children]}
+    for lineage_id in known:
+        counters.setdefault(lineage_id, 0)
+    attempted = {
+        str(item.get("lineage_id"))
+        for item in semantic_deltas.values()
+        if str(item.get("lineage_id", "")).strip()
+    }
+    for lineage_id in attempted:
         counters[lineage_id] = 0 if lineage_id in improved else counters.get(lineage_id, 0) + 1
     return improved
 
@@ -1976,7 +2038,7 @@ def evolve_population(
     for generation in range(1, generations + 1):
         aggregate = aggregate_round(root, round_id=current)
         eligible = [h for h in _population_handoffs(aggregate) if _rsa_eligible(h)]
-        if len(eligible) < 2 and not any(needs_witness_closure(item) for item in eligible):
+        if len(eligible) < 2 and not any(closure_mode(item) is not None for item in eligible):
             stop_reason = "fewer-than-two-grounded-components"
             break
         for handoff in eligible:
@@ -2011,7 +2073,8 @@ def evolve_population(
             results = read_json(results_path).get("results", []) if results_path.is_file() else []
             failed_ids = {item.get("lane_id") for item in results if item.get("status") != "completed"}
             protected_failed = any(
-                lane.get("lane_id") in failed_ids and lane.get("lane_role") == "witness-closure"
+                lane.get("lane_id") in failed_ids
+                and lane.get("lane_role") in {"witness-closure", "reachability-closure"}
                 for lane in child_plan.get("lanes", [])
             )
             if protected_failed:
@@ -2038,7 +2101,7 @@ def evolve_population(
             closure_ids = {
                 str(lane.get("lane_id"))
                 for lane in child_plan.get("lanes", [])
-                if lane.get("lane_role") == "witness-closure"
+                if lane.get("lane_role") in {"witness-closure", "reachability-closure"}
             }
             missing_closure = bool(closure_ids - completed_ids)
             if missing_closure or len(child_eligible) < 2:

@@ -284,15 +284,20 @@ def canonicalize_witness(
 
 
 def witness_progress(handoff: dict[str, Any]) -> tuple[int, int, int]:
+    """Return contiguous-prefix progress plus total demonstrated/reached observations."""
     witness = handoff.get("witness", {})
     phases = witness.get("phases", []) if isinstance(witness, dict) else []
     highest = -1
     demonstrated = 0
     reached = 0
+    prefix_open = False
     for index, phase in enumerate(phases):
         status = phase.get("status") if isinstance(phase, dict) else None
-        if status in {"reached", "demonstrated", "not-applicable"}:
+        satisfied = status in {"reached", "demonstrated", "not-applicable"}
+        if satisfied and not prefix_open:
             highest = index
+        elif not satisfied:
+            prefix_open = True
         if status == "demonstrated":
             demonstrated += 1
         if status in {"reached", "demonstrated"}:
@@ -340,3 +345,39 @@ def needs_witness_closure(handoff: dict[str, Any]) -> bool:
         and open_prerequisite_ids(handoff)
         and not witness_terminal(handoff)
     )
+
+
+def needs_reachability_closure(handoff: dict[str, Any]) -> bool:
+    """Protect a reproducible conditional mechanism while replacing artificial setup."""
+    witness = handoff.get("witness", {})
+    open_records = [
+        item
+        for item in prerequisite_records(handoff)
+        if item.get("status") in OPEN_PREREQUISITE_STATES
+    ]
+    exact_state_blocker = any(
+        item.get("kind") in {"state", "numeric", "settlement", "timing", "deployment"}
+        and str(item.get("resolution_condition", "")).strip()
+        for item in open_records
+    )
+    conditional_setup = isinstance(witness, dict) and (
+        witness.get("source_faithful") is False
+        or witness.get("setup_taint") in {"attack-path", "unknown"}
+    )
+    return bool(
+        handoff.get("status") in {"candidate", "near-miss", "blocked"}
+        and handoff.get("execution", {}).get("ran") is True
+        and conditional_setup
+        and has_property_signal(handoff)
+        and exact_state_blocker
+        and handoff.get("evidence")
+        and not witness_terminal(handoff)
+    )
+
+
+def closure_mode(handoff: dict[str, Any]) -> str | None:
+    if needs_witness_closure(handoff):
+        return "witness"
+    if needs_reachability_closure(handoff):
+        return "reachability"
+    return None

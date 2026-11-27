@@ -53,6 +53,14 @@ CAMPAIGN_DIRECTORIES = (
     "prestate",
     "rsa",
     "migrations",
+    "continuations",
+    "trace-facts",
+    "surfaces",
+    "compositions",
+    "actors",
+    "oracles",
+    "harnesses",
+    "solver-jobs",
 )
 
 
@@ -129,7 +137,7 @@ def init_campaign(
     campaign = {
         "schema": RUNTIME_SCHEMA,
         "kind": "campaign",
-        "runtime_version": "4.3.0",
+        "runtime_version": "4.4.0",
         "epoch": 1,
         "label": label,
         "target": target,
@@ -151,6 +159,9 @@ def init_campaign(
     }
     write_json_atomic(root / "campaign.json", campaign)
     write_json_atomic(root / "counters.json", {})
+    from .features import default_feature_record
+
+    write_json_atomic(root / "orchestration" / "features.json", default_feature_record())
     event(root, "campaign.initialized", label=label, source=str(source))
     return campaign
 
@@ -171,7 +182,37 @@ def migrate_campaign(root: Path) -> dict[str, Any]:
     """Explicitly migrate v3 metadata while preserving legacy records and log bytes."""
     campaign = require_campaign(root)
     if campaign["schema"] == RUNTIME_SCHEMA:
-        return {"migrated": False, "reason": "already-current", "campaign": campaign}
+        if campaign.get("runtime_version") == "4.4.0":
+            return {"migrated": False, "reason": "already-current", "campaign": campaign}
+        migration_id = allocate_id(root, "MIGRATION")
+        now = utc_now()
+        before_hash = digest_json(campaign)
+        with exclusive_lock(root):
+            current = read_json(root / "campaign.json")
+            for category in CAMPAIGN_DIRECTORIES:
+                (root / category).mkdir(parents=True, exist_ok=True)
+            from .features import default_feature_record
+
+            features = root / "orchestration" / "features.json"
+            if not features.exists():
+                write_json_atomic(features, default_feature_record())
+            current.update({"runtime_version": "4.4.0", "updated_at": now})
+            write_json_atomic(root / "campaign.json", current)
+            migration = {
+                "schema": RUNTIME_SCHEMA,
+                "kind": "campaign-migration",
+                "id": migration_id,
+                "created_at": now,
+                "from_schema": RUNTIME_SCHEMA,
+                "to_schema": RUNTIME_SCHEMA,
+                "from_runtime_version": campaign.get("runtime_version"),
+                "to_runtime_version": "4.4.0",
+                "source_campaign_sha256": before_hash,
+                "policy": "existing records remain byte-for-byte unchanged; v4.4 records are additive",
+            }
+            write_json_atomic(root / "migrations" / f"{migration_id}.json", migration)
+        event(root, "campaign.upgraded", migration_id=migration_id, from_runtime_version=campaign.get("runtime_version"))
+        return {"migrated": True, "migration": migration, "campaign": require_campaign(root)}
     if campaign["schema"] != LEGACY_RUNTIME_SCHEMA:
         raise ValidationError(f"unsupported source schema: {campaign['schema']}")
 
@@ -187,7 +228,7 @@ def migrate_campaign(root: Path) -> dict[str, Any]:
             (root / category).mkdir(parents=True, exist_ok=True)
         (root / "evidence" / "objects" / "sha256").mkdir(parents=True, exist_ok=True)
         (root / "evidence" / "bundles").mkdir(parents=True, exist_ok=True)
-        current.update({"schema": RUNTIME_SCHEMA, "runtime_version": "4.3.0", "epoch": 1, "updated_at": now})
+        current.update({"schema": RUNTIME_SCHEMA, "runtime_version": "4.4.0", "epoch": 1, "updated_at": now})
         write_json_atomic(root / "campaign.json", current)
         migration = {
             "schema": RUNTIME_SCHEMA,
@@ -201,6 +242,9 @@ def migrate_campaign(root: Path) -> dict[str, Any]:
             "policy": "legacy records remain byte-for-byte unchanged",
         }
         write_json_atomic(root / "migrations" / f"{migration_id}.json", migration)
+        from .features import default_feature_record
+
+        write_json_atomic(root / "orchestration" / "features.json", default_feature_record())
     event(root, "campaign.migrated", migration_id=migration_id, from_schema=LEGACY_RUNTIME_SCHEMA)
     return {"migrated": True, "migration": migration, "campaign": require_campaign(root)}
 

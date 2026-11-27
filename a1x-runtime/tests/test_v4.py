@@ -48,7 +48,12 @@ from a1x_runtime.scale import (
     create_recombination_round,
     evolve_population,
 )
-from a1x_runtime.witness import canonicalize_prerequisites, needs_witness_closure
+from a1x_runtime.witness import (
+    canonicalize_prerequisites,
+    needs_reachability_closure,
+    needs_witness_closure,
+    witness_progress,
+)
 
 
 class A1XV4Test(unittest.TestCase):
@@ -387,8 +392,20 @@ class A1XV4Test(unittest.TestCase):
             semantic_deltas={"LANE-0002": {"lineage_id": "LINEAGE-fresh", "improved": True}},
         )
         self.assertEqual(improved, {"LINEAGE-fresh"})
-        self.assertEqual(counters["LINEAGE-balancer"], 2)
+        self.assertEqual(counters["LINEAGE-balancer"], 1)
         self.assertEqual(counters["LINEAGE-fresh"], 0)
+
+    def test_contiguous_phase_progress_and_reachability_closure(self) -> None:
+        conditional = self._closure_handoff("LANE-0001", "LINEAGE-conditional", phase="trigger")
+        conditional["witness"]["source_faithful"] = False
+        conditional["witness"]["setup_taint"] = "attack-path"
+        self.assertEqual(witness_progress(conditional)[0], -1)
+        self.assertTrue(needs_reachability_closure(conditional))
+        self.assertFalse(needs_witness_closure(conditional))
+        conditional["witness"]["phases"][0].update(
+            {"status": "reached", "property": "state constructed", "evidence_artifact": "trace.txt"}
+        )
+        self.assertEqual(witness_progress(conditional)[0], 1)
 
     def test_failed_protected_closure_is_retried_and_not_replaced(self) -> None:
         parent = self._closure_handoff("LANE-0001", "LINEAGE-balancer")
@@ -499,9 +516,11 @@ class A1XV4Test(unittest.TestCase):
 
     def test_equal_cost_evaluation_records_all_dimensions(self) -> None:
         costs = {"wall_seconds": 10, "cpu_core_seconds": 20, "peak_memory_bytes": 1000, "llm_input_tokens": 30, "llm_output_tokens": 10, "rpc_requests": 2, "evm_executions": 500}
-        record_trial(self.root, incident="incident-1", configuration="v4-foundry-wake", outcome="replayable-witness", costs=costs, evidence_id=None, notes="smoke")
+        record_trial(self.root, incident="incident-1", configuration="v4-foundry-wake", outcome="near-miss", costs=costs, evidence_id=None, notes="smoke")
         summary = evaluation_summary(self.root)
-        self.assertEqual(summary["configurations"]["v4-foundry-wake"]["replayable_witnesses"], 1)
+        self.assertEqual(summary["configurations"]["v4-foundry-wake"]["replayable_witnesses"], 0)
+        with self.assertRaisesRegex(ValidationError, "requires linked evidence"):
+            record_trial(self.root, incident="incident-2", configuration="v4.4", outcome="replayable-witness", costs=costs, evidence_id=None, notes="invalid")
 
 
 class MigrationTest(unittest.TestCase):
