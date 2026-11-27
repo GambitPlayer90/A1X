@@ -1,0 +1,10 @@
+flowchart TD
+    candidate["Demonstrated candidate"] --> extension["Impact extension"]
+    candidate --> consumer["Alternate consumer"]
+    candidate --> refutation["Strongest refutation"]
+    candidate --> minimization["Causal minimization"]
+    extension --> impact["Record downstream consequences and exact blockers"]
+    consumer --> impact
+    refutation --> impact
+    minimization --> impact
+    impact --> assess["Completion assessment"]

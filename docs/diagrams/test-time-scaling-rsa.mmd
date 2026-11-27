@@ -1,0 +1,10 @@
+flowchart TD
+    population["Grounded lead population"] --> selection["Select leads + preserve reserve"]
+    selection --> closure["K=1: close a witness"]
+    selection --> composition["K=2: compose leads"]
+    selection --> fresh["Fresh: explore independently"]
+    closure --> assess["Execute + assess evidence"]
+    composition --> assess
+    fresh --> assess
+    assess -->|"Next generation within budget"| population
+    assess --> result["Validate, retain or record blocker"]
