@@ -1,0 +1,9 @@
+flowchart TD
+    target["Target + pinned state"] --> bootstrap["Independent first pass"]
+    bootstrap --> analysis["Map, derive, compose"]
+    analysis --> experiment["Execute a discriminating test"]
+    experiment --> evidence["Evidence + remaining prerequisites"]
+    evidence --> scaling["Test-time scaling + RSA"]
+    scaling -->|"Next experiments"| analysis
+    evidence -->|"Candidate"| validation["Validate + replay"]
+    validation --> output["Measured impact + open risks"]

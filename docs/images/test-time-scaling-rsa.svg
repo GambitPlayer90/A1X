@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1020" viewBox="0 0 1800 1020" role="img" aria-labelledby="title desc">
+<title id="title">A1X · Test-time scaling + RSA</title>
+<desc id="desc">Parallel discovery, deeper exploit search, and evidence-grounded recombination.</desc>
+<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#647d94"/></marker></defs>
+<rect width="1800" height="1020" fill="white"/>
+<g font-family="DejaVu Sans, Arial, sans-serif">
+<text x="64" y="70" font-size="37" font-weight="700" text-anchor="start" fill="#17212b">A1X · Test-time scaling + RSA</text>
+<text x="64" y="111" font-size="20" font-weight="400" text-anchor="start" fill="#536171">Parallel discovery, deeper exploit search, and evidence-grounded recombination.</text>
+<text x="64" y="156" font-size="19" font-weight="400" text-anchor="start" fill="#17212b">TTS (test-time scaling): allocate more inference and execution effort during the hunt.</text>
+<text x="64" y="187" font-size="19" font-weight="400" text-anchor="start" fill="#17212b">RSA (recursive self-aggregation): reuse parent results to build and test new attack paths.</text>
+<path d="M310 500H360" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M630 500H680" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M650 500V285H680" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M650 500V715H680" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1040 285H1065V715H1040" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1040 500H1090" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1370 500H1420" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1420 570H1405Q1390 570 1390 585V855Q1390 875 1370 875H515Q495 875 495 855V600" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1585 610V700" fill="none" stroke="#647d94" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="50" y="390" width="260" height="220" rx="12" fill="#f2f7fc" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="180.0" y="426" font-size="23" font-weight="600" text-anchor="middle" fill="#17212b">Parallel discovery</text>
+<text x="180.0" y="464" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">4 independent Codex lanes</text>
+<text x="180.0" y="492" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Value / numerical</text>
+<text x="180.0" y="520" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Authority / trust</text>
+<text x="180.0" y="548" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Lifecycle / composition</text>
+<text x="180.0" y="576" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Adversarial refutation</text>
+<rect x="360" y="400" width="270" height="200" rx="12" fill="#f2f7fc" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="495.0" y="436" font-size="23" font-weight="600" text-anchor="middle" fill="#17212b">Shared evidence</text>
+<text x="495.0" y="474" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Attack prefixes &amp; traces</text>
+<text x="495.0" y="502" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Constraints &amp; blockers</text>
+<text x="495.0" y="530" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Select diverse leads</text>
+<text x="495.0" y="558" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Retain useful alternatives</text>
+<rect x="680" y="210" width="360" height="150" rx="12" fill="#ffffff" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="860.0" y="246" font-size="23" font-weight="600" text-anchor="middle" fill="#17212b">K=1 · Sequential depth</text>
+<text x="860.0" y="284" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Continue one partial exploit</text>
+<text x="860.0" y="312" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Resolve its next prerequisite</text>
+<rect x="680" y="420" width="360" height="160" rx="12" fill="#ffffff" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="860.0" y="456" font-size="23" font-weight="600" text-anchor="middle" fill="#17212b">K=2 · RSA composition</text>
+<text x="860.0" y="494" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Combine two grounded leads</text>
+<text x="860.0" y="522" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Check state, actors &amp; call order</text>
+<text x="860.0" y="550" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Example: prefix + solved constraint</text>
+<rect x="680" y="640" width="360" height="150" rx="12" fill="#ffffff" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="860.0" y="676" font-size="22" font-weight="600" text-anchor="middle" fill="#17212b">Fresh · Independent search</text>
+<text x="860.0" y="714" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Explore another mechanism</text>
+<text x="860.0" y="742" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Without parent conclusions</text>
+<rect x="1090" y="390" width="280" height="220" rx="12" fill="#f2f7fc" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="1230.0" y="426" font-size="22" font-weight="600" text-anchor="middle" fill="#17212b">Execute experiments</text>
+<text x="1230.0" y="464" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Pinned local fork</text>
+<text x="1230.0" y="492" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">PoC tests + fuzz/solver replay</text>
+<text x="1230.0" y="520" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Record traces &amp; state deltas</text>
+<rect x="1420" y="390" width="330" height="220" rx="12" fill="#f2f7fc" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="1585.0" y="426" font-size="23" font-weight="600" text-anchor="middle" fill="#17212b">Assess execution</text>
+<text x="1585.0" y="464" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">New reachable state?</text>
+<text x="1585.0" y="492" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Prerequisite resolved?</text>
+<text x="1585.0" y="520" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Property violation + control?</text>
+<text x="1585.0" y="548" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Mechanism refuted?</text>
+<rect x="1420" y="700" width="330" height="145" rx="12" fill="#ffffff" stroke="#bccbd9" stroke-width="1.6"/>
+<text x="1585.0" y="736" font-size="23" font-weight="600" text-anchor="middle" fill="#17212b">Validate candidate</text>
+<text x="1585.0" y="774" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Clean replay &amp; target fidelity</text>
+<text x="1585.0" y="802" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Independent review</text>
+<text x="1605" y="660" font-size="16" font-weight="400" text-anchor="start" fill="#17212b">Supported violation</text>
+<text x="935" y="909" font-size="19" font-weight="400" text-anchor="middle" fill="#17212b">Next generation: select follow-up experiments using execution evidence</text>
+<text x="935" y="950" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">K = parent results reused by each worker · Incompatible parents remain separate</text>
+<text x="935" y="978" font-size="17" font-weight="400" text-anchor="middle" fill="#536171">Continue within campaign budgets; track progress separately for each attack mechanism.</text>
+</g></svg>

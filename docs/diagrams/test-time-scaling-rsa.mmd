@@ -1,0 +1,11 @@
+flowchart LR
+    discovery["Parallel discovery: 4 independent Codex lanes"] --> evidence["Shared evidence: prefixes, traces, constraints, blockers"]
+    evidence --> closure["K=1: continue a partial exploit"]
+    evidence --> composition["K=2: compose grounded leads"]
+    evidence --> fresh["Fresh: independent mechanism search"]
+    closure --> test["Execute experiments on a pinned local fork"]
+    composition --> test
+    fresh --> test
+    test --> assessment["Assess execution: reachability, prerequisites, property, refutation"]
+    assessment -->|"Next generation within budget"| evidence
+    assessment -->|"Supported violation"| validation["Clean replay, fidelity, independent review"]
