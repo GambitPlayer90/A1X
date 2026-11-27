@@ -5,7 +5,7 @@ The illustrations use a minimal documentation style: white backgrounds, restrain
 | Diagram | Relationship | Editable source |
 | --- | --- | --- |
 | Investigation workflow | Target intake, independent analysis, experiments, feedback, scaling, and validation | [Mermaid](investigation-workflow.mmd) |
-| Test-time scaling and RSA | Left-to-right flow with plain labels for continuing an idea, combining ideas, new exploration, tests, and feedback | [Mermaid](test-time-scaling-rsa.mmd) |
+| Test-time scaling and RSA | Horizontal explanation for bug hunters: independent lanes, shared evidence, K=1 continuation, K=2 composition, fresh search, execution, and generation feedback | [Mermaid](test-time-scaling-rsa.mmd) |
 | Candidate expansion | Four automatically allocated extension/refutation perspectives | [Mermaid](candidate-expansion.mmd) |
 
 The `.mmd` files preserve graph topology. The editable SVG originals and PNG mirrors live in [docs/images](../images/). The README embeds PNG files with repository-relative paths, including in offline downloads.

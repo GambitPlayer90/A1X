@@ -1,11 +1,11 @@
 flowchart LR
-    ideas["Find attack ideas"] --> selection["Choose the next tests"]
-    selection --> closure["Keep working on an idea"]
-    selection --> composition["Combine two ideas"]
-    selection --> fresh["Try a new idea"]
-    closure --> test["Run local tests"]
+    discovery["Parallel discovery: 4 independent Codex lanes"] --> evidence["Shared evidence: prefixes, traces, constraints, blockers"]
+    evidence --> closure["K=1: continue a partial exploit"]
+    evidence --> composition["K=2: compose grounded leads"]
+    evidence --> fresh["Fresh: independent mechanism search"]
+    closure --> test["Execute experiments on a pinned local fork"]
     composition --> test
     fresh --> test
-    test --> result["Check the results"]
-    result -->|"Choose the next round"| selection
-    result -->|"Possible bug"| confirmation["Confirm the finding"]
+    test --> assessment["Assess execution: reachability, prerequisites, property, refutation"]
+    assessment -->|"Next generation within budget"| evidence
+    assessment -->|"Supported violation"| validation["Clean replay, fidelity, independent review"]

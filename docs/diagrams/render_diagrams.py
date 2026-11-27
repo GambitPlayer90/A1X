@@ -49,6 +49,13 @@ class Figure:
             cairosvg.svg2png(url=str(path), write_to=str(OUT / f"{stem}.png"))
         print(path.relative_to(OUT.parent.parent))
 
+    def card(self, x, y, width, height, title, lines, accent=False, size=23):
+        fill = "#f2f7fc" if accent else "#ffffff"
+        self.parts.append(f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="12" fill="{fill}" stroke="#bccbd9" stroke-width="1.6"/>')
+        self.text(x + width / 2, y + 36, title, size, anchor="middle", weight=600)
+        for index, line in enumerate(lines):
+            self.text(x + width / 2, y + 74 + index * 28, line, 17, anchor="middle", fill="#536171")
+
 
 def investigation():
     f = Figure("A1X investigation workflow", "From protocol obligations to tested vulnerability evidence")
@@ -72,32 +79,56 @@ def investigation():
 
 def scaling():
     f = Figure(
-        "How A1X explores attack ideas",
-        "Keep working on promising ideas, combine discoveries, and try new approaches.",
-        height=900, width=2000,
+        "A1X · Test-time scaling + RSA",
+        "Parallel discovery, deeper exploit search, and evidence-grounded recombination.",
+        height=1020, width=1800,
     )
-    # Five columns, left to right. The three ways to explore are alternatives.
-    f.edge("M328 460H400")
-    f.edge("M700 460H770")
-    f.edge("M735 460V260H770")
-    f.edge("M735 460V660H770")
-    f.edge("M1120 260H1155V660H1120", arrow=False)
-    f.edge("M1120 460H1200")
-    f.edge("M1480 460H1550")
-    # Results feed another choice of tests; the loop has one arrowhead.
-    f.edge("M1550 495H1510Q1490 495 1490 515V770Q1490 790 1470 790H570Q550 790 550 770V515")
-    f.edge("M1740 515V610")
-    f.node(48, 405, 280, 110, "Find attack ideas", "Independent AI investigations", accent=True, size=24)
-    f.node(400, 405, 300, 110, "Choose the next tests", "Keep useful alternatives", accent=True, size=23)
-    f.node(770, 210, 350, 100, "Keep working on an idea", "Solve the next missing step", size=22)
-    f.node(770, 405, 350, 110, "Combine two ideas", "Check whether they fit together", size=24)
-    f.node(770, 610, 350, 100, "Try a new idea", "Look from a different angle", size=24)
-    f.node(1200, 405, 280, 110, "Run local tests", "Test ideas on a local fork", accent=True, size=24)
-    f.node(1550, 405, 380, 110, "Check the results", "Did the idea actually work?", accent=True, size=25)
-    f.node(1550, 610, 380, 100, "Confirm the finding", "Replay it and challenge it", size=24)
-    f.text(1760, 570, "Possible bug", 17)
-    f.text(1010, 826, "Use the results to choose the next round", 20, anchor="middle")
-    f.text(945, 555, "Keep separate if they do not fit.", 16, anchor="middle", fill="#536171")
+    f.text(64, 156, "TTS (test-time scaling): allocate more inference and execution effort during the hunt.", 19)
+    f.text(64, 187, "RSA (recursive self-aggregation): reuse parent results to build and test new attack paths.", 19)
+    # Five columns. The middle column separates depth, composition, and breadth.
+    f.edge("M310 500H360")
+    f.edge("M630 500H680")
+    f.edge("M650 500V285H680")
+    f.edge("M650 500V715H680")
+    f.edge("M1040 285H1065V715H1040", arrow=False)
+    f.edge("M1040 500H1090")
+    f.edge("M1370 500H1420")
+    # Execution results inform the next population; no vote establishes a bug.
+    f.edge("M1420 570H1405Q1390 570 1390 585V855Q1390 875 1370 875H515Q495 875 495 855V600")
+    f.edge("M1585 610V700")
+    f.card(50, 390, 260, 220, "Parallel discovery", [
+        "4 independent Codex lanes", "Value / numerical",
+        "Authority / trust", "Lifecycle / composition", "Adversarial refutation",
+    ], True, size=23)
+    f.card(360, 400, 270, 200, "Shared evidence", [
+        "Attack prefixes & traces", "Constraints & blockers",
+        "Select diverse leads", "Retain useful alternatives",
+    ], True)
+    f.card(680, 210, 360, 150, "K=1 · Sequential depth", [
+        "Continue one partial exploit", "Resolve its next prerequisite",
+    ])
+    f.card(680, 420, 360, 160, "K=2 · RSA composition", [
+        "Combine two grounded leads", "Check state, actors & call order",
+        "Example: prefix + solved constraint",
+    ])
+    f.card(680, 640, 360, 150, "Fresh · Independent search", [
+        "Explore another mechanism", "Without parent conclusions",
+    ], size=22)
+    f.card(1090, 390, 280, 220, "Execute experiments", [
+        "Pinned local fork", "PoC tests + fuzz/solver replay",
+        "Record traces & state deltas",
+    ], True, size=22)
+    f.card(1420, 390, 330, 220, "Assess execution", [
+        "New reachable state?", "Prerequisite resolved?",
+        "Property violation + control?", "Mechanism refuted?",
+    ], True)
+    f.card(1420, 700, 330, 145, "Validate candidate", [
+        "Clean replay & target fidelity", "Independent review",
+    ])
+    f.text(1605, 660, "Supported violation", 16)
+    f.text(935, 909, "Next generation: select follow-up experiments using execution evidence", 19, anchor="middle")
+    f.text(935, 950, "K = parent results reused by each worker · Incompatible parents remain separate", 17, anchor="middle", fill="#536171")
+    f.text(935, 978, "Continue within campaign budgets; track progress separately for each attack mechanism.", 17, anchor="middle", fill="#536171")
     f.save("test-time-scaling-rsa")
 
 

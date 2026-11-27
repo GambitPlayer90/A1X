@@ -63,9 +63,9 @@ Stagnation is tracked by lineage so unrelated discoveries cannot reset a stalled
 
 RSA iteratively creates new candidates from subsets of an existing population. A1X adapts the idea to vulnerability investigation by passing **grounded components and their artifacts** between generations: mechanisms, state prefixes, actor requirements, constraints, observations, and unresolved prerequisites.
 
-![Left-to-right A1X workflow: find attack ideas, choose tests, keep working on an idea or combine two ideas or try a new idea, run local tests, and check the results.](docs/images/test-time-scaling-rsa.png)
+![Horizontal A1X graph: independent Codex discovery lanes feed shared evidence, K=1 exploit continuation, K=2 RSA composition, fresh search, pinned-fork experiments, and execution-guided selection.](docs/images/test-time-scaling-rsa.png)
 
-*The three middle branches mean: continue one promising idea (K=1), combine two compatible ideas (K=2), or explore independently. Results guide the next round; possible bugs receive replay and further checks.*
+*TTS allocates investigation-time breadth and depth. K=1 continues one partial exploit; K=2 recombines two grounded components; fresh lanes search independently. Execution evidence guides subsequent generations, while supported violations proceed to replay and validation.*
 
 | Lane role | Input | Assigned task |
 | --- | --- | --- |
