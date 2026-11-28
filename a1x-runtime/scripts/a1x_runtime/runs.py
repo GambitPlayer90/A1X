@@ -8,7 +8,7 @@ from typing import Any
 from .atomic import exclusive_lock, read_json, seal, verify_seal, write_json_atomic
 from .errors import BudgetError, IntegrityError, ValidationError
 from .hashing import is_relative_to, path_digest, safe_relative
-from .process import execute
+from .process import execute, reject_model_argv
 from .records import allocate_id, event, require_campaign, schema_for, update_research_counter, utc_now, validate_id
 
 RUN_CLASSES = {"candidate", "control", "repair", "fuzz", "solve", "recon"}
@@ -83,8 +83,10 @@ def plan_run(
     extends_candidate_id: str | None = None,
     extends_run: str | None = None,
     extension_prefix: Path | None = None,
+    ledger_experiment_id: str | None = None,
 ) -> dict[str, Any]:
     campaign = require_campaign(root)
+    reject_model_argv(argv)
     if timeout_seconds is None:
         timeout_seconds = int(campaign["budgets"]["default_run_timeout_seconds"])
     if max_output_bytes is None:
@@ -108,6 +110,16 @@ def plan_run(
     hypothesis_path = root / "hypotheses" / f"{hypothesis_id}.json"
     if not hypothesis_path.exists():
         raise ValidationError(f"unknown hypothesis: {hypothesis_id}")
+    hypothesis_record = read_json(hypothesis_path)
+    ledger_investigation_id = hypothesis_record.get("ledger_investigation_id")
+    if ledger_experiment_id:
+        from .ledger import show_record
+
+        experiment = show_record(root, ledger_experiment_id)
+        if experiment.get("kind") != "EXP":
+            raise ValidationError("ledger_experiment_id must reference an EXP ledger record")
+        if ledger_investigation_id and str(ledger_investigation_id) not in experiment.get("parents", []):
+            raise ValidationError("typed run EXP must parent its canonical INV record")
     parent_plan: dict[str, Any] | None = None
     if control_for_run:
         control_for_run = validate_id(control_for_run, "RUN")
@@ -246,6 +258,8 @@ def plan_run(
         "id": run_id,
         "created_at": utc_now(),
         "hypothesis_id": hypothesis_id,
+        "ledger_investigation_id": ledger_investigation_id,
+        "ledger_experiment_id": ledger_experiment_id,
         "run_class": run_class,
         "cwd": {"anchor": cwd_anchor, "path": cwd_relative},
         "argv_template": argv,
@@ -274,6 +288,27 @@ def plan_run(
         hypothesis.setdefault("runs", []).append(run_id)
         hypothesis["updated_at"] = utc_now()
         write_json_atomic(hypothesis_path, hypothesis)
+    if ledger_investigation_id:
+        from .ledger import link_runtime_ref
+
+        link_runtime_ref(
+            root,
+            str(ledger_investigation_id),
+            f"runs/{run_id}/plan.json",
+            expected_kind="INV",
+            reason=f"linked sealed experiment {run_id}",
+        )
+    if ledger_experiment_id:
+        from .ledger import link_runtime_ref
+
+        link_runtime_ref(
+            root,
+            ledger_experiment_id,
+            f"runs/{run_id}/plan.json",
+            expected_kind="EXP",
+            reason=f"linked sealed run plan {run_id}",
+            status="active",
+        )
     event(root, "run.planned", run_id=run_id, hypothesis_id=hypothesis_id, plan_sha256=plan_hash)
     return {"run_id": run_id, "plan_sha256": plan_hash, "plan": plan}
 
@@ -389,4 +424,17 @@ def observe_run(
     write_json_atomic(observation_path, record)
     seal(observation_path, run_dir / "observation.sha256")
     event(root, "run.observed", run_id=run_id, outcome=outcome, property_violated=property_violated)
+    plan = read_json(run_dir / "plan.json")
+    ledger_experiment_id = plan.get("ledger_experiment_id")
+    if ledger_experiment_id:
+        from .ledger import link_runtime_ref
+
+        link_runtime_ref(
+            root,
+            str(ledger_experiment_id),
+            f"runs/{run_id}/observation.json",
+            expected_kind="EXP",
+            reason=f"linked observed experiment {run_id}: {outcome}",
+            status="closed",
+        )
     return record

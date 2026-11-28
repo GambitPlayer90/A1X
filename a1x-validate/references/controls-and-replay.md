@@ -27,7 +27,7 @@ Verify hashes for target sources, harness, configuration, dependency locks, and 
 
 ## Independence
 
-Clean replay guards against workspace drift and hidden dependencies; it does not independently judge semantics. For E6, run `review prepare-blind` and `review execute-blind`. The runtime seals a minimal evidence packet, withholds investigator rationale, launches a fresh process, hashes its inputs/output, and records process identity. The reviewer first reproduces the behavior, then challenges causality, actor reachability, deployed applicability, and impact. A declared Boolean or same-context review cannot satisfy E6. Without this mechanical blind-review record, the evidence ceiling is E5.
+Clean replay guards against workspace drift and hidden dependencies; it does not independently judge semantics. For E6, run `review prepare-blind`, give the sealed rationale-withheld packet to a distinct visible built-in subagent in the current Codex session, and then bind its structured result with `review complete-in-session`. The reviewer first reproduces the behavior, then challenges causality, actor reachability, deployed applicability, and impact. A declared Boolean or primary-thread self-review cannot satisfy E6. Without the bound subagent review record, the evidence ceiling is E5. The runtime prepares and validates the packet but never launches a model process.
 
 ## Failure
 

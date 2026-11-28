@@ -1,6 +1,0 @@
-interface:
-  display_name: "A1X Execute"
-  short_description: "Build and diagnose faithful fork-based vulnerability tests"
-  default_prompt: "Validate the selected hypothesis against a pinned local fork with a faithful harness."
-policy:
-  allow_implicit_invocation: false

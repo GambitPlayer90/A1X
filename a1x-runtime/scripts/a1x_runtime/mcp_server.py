@@ -11,7 +11,6 @@ from .evidence_bundles import load_bundle, verify_bundle
 from .explorer import retrieve_verified_contract
 from .operations import recommend_next
 from .records import verify_event_chain
-from .rsa import build_compatibility_graph
 
 
 def _root(arguments: dict[str, Any]) -> Path:
@@ -28,11 +27,6 @@ TOOLS: dict[str, tuple[str, dict[str, Any], Callable[[dict[str, Any]], Any]]] = 
         "Route the next experiment by its unresolved blocker",
         {"root": {"type": "string"}, "blocker": {"type": "string"}, "available_backends": {"type": "array", "items": {"type": "string"}}},
         lambda a: recommend_next(_root(a), blocker=str(a["blocker"]), available_backends=list(a["available_backends"])),
-    ),
-    "rsa_graph": (
-        "Create a semantic compatibility graph over immutable evidence",
-        {"root": {"type": "string"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}, "campaign_epoch": {"type": "integer"}, "idempotency_key": {"type": "string"}},
-        lambda a: build_compatibility_graph(_root(a), list(a["evidence_ids"]), campaign_epoch=int(a["campaign_epoch"]), idempotency_key=str(a["idempotency_key"])),
     ),
     "explorer_retrieve": (
         "Retrieve Etherscan V2 verified metadata host-side and preserve it as immutable recon evidence without exposing the API key",
@@ -68,7 +62,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any] | None:
     if method == "notifications/initialized":
         return None
     if method == "initialize":
-        return _response(identifier, result={"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "a1x-campaign", "version": "4.4.0"}})
+        return _response(identifier, result={"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "a1x-campaign", "version": "5.0.0"}})
     if method == "tools/list":
         return _response(identifier, result={"tools": _tool_definitions()})
     if method == "tools/call":

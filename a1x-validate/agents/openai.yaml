@@ -1,6 +1,0 @@
-interface:
-  display_name: "A1X Validate"
-  short_description: "Refute, replay, extend, and calibrate vulnerability evidence"
-  default_prompt: "Challenge and independently replay a demonstrated candidate, then distinguish its validity from campaign completeness by tracing every material downstream consequence."
-policy:
-  allow_implicit_invocation: false

@@ -1,4 +1,6 @@
 interface:
   display_name: "A1X Runtime"
-  short_description: "Run typed, event-sourced EVM investigations"
-  default_prompt: "Use $a1x-runtime to operate typed evidence, pinned prestate, capability-aware backends, sequential experiments, semantic TTS/RSA, blind review, replay, impact propagation, and completion mechanics for this authorized smart contract investigation."
+  short_description: "Operate the A1X ledger, fork, evidence, and replay runtime"
+  default_prompt: "Use $a1x-runtime for deterministic ledger, pinned Anvil, sealed runs, evidence, replay, impact, and completion mechanics; never orchestrate model processes."
+policy:
+  allow_implicit_invocation: false

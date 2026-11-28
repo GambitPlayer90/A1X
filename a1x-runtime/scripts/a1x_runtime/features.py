@@ -41,10 +41,10 @@ def default_feature_record() -> dict[str, Any]:
     return {
         "schema": "a1x.runtime/v2",
         "kind": "runtime-feature-flags",
-        "runtime_version": "4.4.0",
+        "runtime_version": "5.0.0",
         "updated_at": utc_now(),
         "features": {name: True for name in FEATURES},
-        "policy": "flags isolate regressions and ablations; the v4.4 release enables every completed subsystem",
+        "policy": "single-session V5 keeps deterministic investigation mechanics enabled; public model-population commands are retired",
     }
 
 

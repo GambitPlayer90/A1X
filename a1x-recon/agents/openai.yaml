@@ -1,6 +1,0 @@
-interface:
-  display_name: "A1X Recon"
-  short_description: "Map deployments, value flows, state, and trust boundaries"
-  default_prompt: "Map the target deployment and build a precise protocol and value-flow model."
-policy:
-  allow_implicit_invocation: false

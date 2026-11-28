@@ -239,5 +239,17 @@ def verify_replay(root: Path, *, run_id: str, workspace: Path) -> dict[str, Any]
     write_json_atomic(replay_dir / "verification.json", record)
     seal(replay_dir / "verification.json", replay_dir / "verification.sha256")
     write_json_atomic(root / "replays" / f"{replay_id}.json", record)
+    ledger_experiment_id = plan.get("ledger_experiment_id")
+    if ledger_experiment_id:
+        from .ledger import link_runtime_ref
+
+        link_runtime_ref(
+            root,
+            str(ledger_experiment_id),
+            f"replays/{replay_id}.json",
+            expected_kind="EXP",
+            reason=f"linked clean replay {replay_id} for {run_id}",
+            status="closed",
+        )
     event(root, "replay.verified", replay_id=replay_id, run_id=run_id, passed=passed)
     return record

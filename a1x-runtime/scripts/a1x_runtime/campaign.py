@@ -22,7 +22,6 @@ from .records import (
     update_research_counter,
     utc_now,
 )
-from .sandbox import bubblewrap_preflight
 
 
 COUNTERS = {
@@ -34,6 +33,8 @@ COUNTERS = {
     "validated_root_causes": 0,
 }
 
+CURRENT_RUNTIME_VERSION = "5.0.0"
+
 CAMPAIGN_DIRECTORIES = (
     "obligations",
     "hypotheses",
@@ -42,7 +43,6 @@ CAMPAIGN_DIRECTORIES = (
     "candidates",
     "replays",
     "reviews",
-    "scale",
     "frontier",
     "impact",
     "orchestration",
@@ -51,7 +51,6 @@ CAMPAIGN_DIRECTORIES = (
     "capabilities",
     "operations",
     "prestate",
-    "rsa",
     "migrations",
     "continuations",
     "trace-facts",
@@ -109,6 +108,7 @@ def init_campaign(
     rpc_env: str | None,
     authorization: str,
     budgets: dict[str, int],
+    block_hash: str | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
     source = source.resolve()
@@ -118,6 +118,10 @@ def init_campaign(
         raise ValidationError("chain id must be positive")
     if block_number is not None and block_number < 0:
         raise ValidationError("block number cannot be negative")
+    if block_hash is not None:
+        if block_number is None or not re.fullmatch(r"0x[0-9a-fA-F]{64}", block_hash):
+            raise ValidationError("block hash requires a pinned block number and 0x-prefixed 32-byte hash")
+        block_hash = block_hash.lower()
     invalid_budgets = {key: value for key, value in budgets.items() if not isinstance(value, int) or value <= 0}
     if invalid_budgets:
         raise ValidationError(f"campaign budgets must be positive integers: {invalid_budgets}")
@@ -137,7 +141,7 @@ def init_campaign(
     campaign = {
         "schema": RUNTIME_SCHEMA,
         "kind": "campaign",
-        "runtime_version": "4.4.0",
+        "runtime_version": CURRENT_RUNTIME_VERSION,
         "epoch": 1,
         "label": label,
         "target": target,
@@ -152,6 +156,7 @@ def init_campaign(
         "chain": {
             "chain_id": chain_id,
             "block_number": block_number,
+            "block_hash": block_hash,
             "rpc_env": rpc_env,
         },
         "budgets": budgets,
@@ -163,6 +168,9 @@ def init_campaign(
 
     write_json_atomic(root / "orchestration" / "features.json", default_feature_record())
     event(root, "campaign.initialized", label=label, source=str(source))
+    from .ledger import initialize_ledger
+
+    initialize_ledger(root)
     return campaign
 
 
@@ -179,10 +187,10 @@ def show_campaign(root: Path) -> dict[str, Any]:
 
 
 def migrate_campaign(root: Path) -> dict[str, Any]:
-    """Explicitly migrate v3 metadata while preserving legacy records and log bytes."""
+    """Upgrade campaign metadata without ever downgrading a V5 campaign."""
     campaign = require_campaign(root)
     if campaign["schema"] == RUNTIME_SCHEMA:
-        if campaign.get("runtime_version") == "4.4.0":
+        if campaign.get("runtime_version") == CURRENT_RUNTIME_VERSION:
             return {"migrated": False, "reason": "already-current", "campaign": campaign}
         migration_id = allocate_id(root, "MIGRATION")
         now = utc_now()
@@ -196,7 +204,7 @@ def migrate_campaign(root: Path) -> dict[str, Any]:
             features = root / "orchestration" / "features.json"
             if not features.exists():
                 write_json_atomic(features, default_feature_record())
-            current.update({"runtime_version": "4.4.0", "updated_at": now})
+            current.update({"runtime_version": CURRENT_RUNTIME_VERSION, "updated_at": now})
             write_json_atomic(root / "campaign.json", current)
             migration = {
                 "schema": RUNTIME_SCHEMA,
@@ -206,9 +214,9 @@ def migrate_campaign(root: Path) -> dict[str, Any]:
                 "from_schema": RUNTIME_SCHEMA,
                 "to_schema": RUNTIME_SCHEMA,
                 "from_runtime_version": campaign.get("runtime_version"),
-                "to_runtime_version": "4.4.0",
+                "to_runtime_version": CURRENT_RUNTIME_VERSION,
                 "source_campaign_sha256": before_hash,
-                "policy": "existing records remain byte-for-byte unchanged; v4.4 records are additive",
+                "policy": "existing records remain byte-for-byte unchanged; V5 metadata and ledger are additive",
             }
             write_json_atomic(root / "migrations" / f"{migration_id}.json", migration)
         event(root, "campaign.upgraded", migration_id=migration_id, from_runtime_version=campaign.get("runtime_version"))
@@ -228,7 +236,7 @@ def migrate_campaign(root: Path) -> dict[str, Any]:
             (root / category).mkdir(parents=True, exist_ok=True)
         (root / "evidence" / "objects" / "sha256").mkdir(parents=True, exist_ok=True)
         (root / "evidence" / "bundles").mkdir(parents=True, exist_ok=True)
-        current.update({"schema": RUNTIME_SCHEMA, "runtime_version": "4.4.0", "epoch": 1, "updated_at": now})
+        current.update({"schema": RUNTIME_SCHEMA, "runtime_version": CURRENT_RUNTIME_VERSION, "epoch": 1, "updated_at": now})
         write_json_atomic(root / "campaign.json", current)
         migration = {
             "schema": RUNTIME_SCHEMA,
@@ -249,8 +257,22 @@ def migrate_campaign(root: Path) -> dict[str, Any]:
     return {"migrated": True, "migration": migration, "campaign": require_campaign(root)}
 
 
-def add_obligation(root: Path, *, title: str, statement: str, boundary: str, units: str, oracle: str) -> dict[str, Any]:
+def add_obligation(
+    root: Path,
+    *,
+    title: str,
+    statement: str,
+    boundary: str,
+    units: str,
+    oracle: str,
+    ledger_obligation_id: str | None = None,
+) -> dict[str, Any]:
     require_campaign(root)
+    if ledger_obligation_id:
+        from .ledger import show_record
+
+        if show_record(root, ledger_obligation_id).get("kind") != "OBL":
+            raise ValidationError("ledger_obligation_id must reference an OBL ledger record")
     if any(not value.strip() for value in (title, statement, boundary, units, oracle)):
         raise ValidationError("obligation fields must be non-empty")
     record_id = allocate_id(root, "OBL")
@@ -264,9 +286,20 @@ def add_obligation(root: Path, *, title: str, statement: str, boundary: str, uni
         "boundary": boundary,
         "units": units,
         "security_oracle": oracle,
+        "ledger_obligation_id": ledger_obligation_id,
         "status": "open",
     }
     write_json_atomic(root / "obligations" / f"{record_id}.json", record)
+    if ledger_obligation_id:
+        from .ledger import link_runtime_ref
+
+        link_runtime_ref(
+            root,
+            ledger_obligation_id,
+            f"obligations/{record_id}.json",
+            expected_kind="OBL",
+            reason=f"linked typed obligation {record_id}",
+        )
     event(root, "obligation.created", obligation_id=record_id)
     return record
 
@@ -280,8 +313,14 @@ def add_hypothesis(
     support_prediction: str,
     refute_prediction: str,
     next_action: str,
+    ledger_investigation_id: str | None = None,
 ) -> dict[str, Any]:
     require_campaign(root)
+    if ledger_investigation_id:
+        from .ledger import show_record
+
+        if show_record(root, ledger_investigation_id).get("kind") != "INV":
+            raise ValidationError("ledger_investigation_id must reference an INV ledger record")
     if any(not value.strip() for value in (mechanism, sequence, support_prediction, refute_prediction, next_action)):
         raise ValidationError("hypothesis fields must be non-empty")
     obligation = root / "obligations" / f"{obligation_id}.json"
@@ -300,32 +339,46 @@ def add_hypothesis(
         "support_prediction": support_prediction,
         "refute_prediction": refute_prediction,
         "next_action": next_action,
+        "ledger_investigation_id": ledger_investigation_id,
         "status": "open",
         "runs": [],
     }
     write_json_atomic(root / "hypotheses" / f"{record_id}.json", record)
+    if ledger_investigation_id:
+        from .ledger import link_runtime_ref
+
+        link_runtime_ref(
+            root,
+            ledger_investigation_id,
+            f"hypotheses/{record_id}.json",
+            expected_kind="INV",
+            reason=f"linked typed hypothesis {record_id}",
+            stage="hypothesis",
+            status="active",
+        )
     update_research_counter(root, "hypotheses_investigated")
     event(root, "hypothesis.created", hypothesis_id=record_id, obligation_id=obligation_id)
     return record
 
 
 def doctor() -> dict[str, Any]:
-    tools = ["python3", "git", "forge", "cast", "anvil", "echidna", "medusa", "codex", "halmos", "slither", "wake", "aderyn", "ityfuzz", "bwrap"]
+    tools = ["python3", "git", "solc", "forge", "cast", "anvil", "slither", "graphify", "crytic-compile", "echidna", "medusa", "halmos", "wake", "aderyn", "ityfuzz"]
     version_args = {
         "python3": ["--version"],
         "git": ["--version"],
+        "solc": ["--version"],
         "forge": ["--version"],
         "cast": ["--version"],
         "anvil": ["--version"],
         "echidna": ["--version"],
         "medusa": ["--version"],
-        "codex": ["--version"],
         "halmos": ["--version"],
         "slither": ["--version"],
+        "graphify": ["--version"],
+        "crytic-compile": ["--version"],
         "wake": ["--version"],
         "aderyn": ["--version"],
         "ityfuzz": ["--version"],
-        "bwrap": ["--version"],
     }
     def inspect_tool(tool: str) -> tuple[str, dict[str, Any]]:
         executable = shutil.which(tool)
@@ -356,10 +409,7 @@ def doctor() -> dict[str, Any]:
                 found["echidna"].pop("version_error", None)
         except (OSError, subprocess.SubprocessError):
             pass
-    core = ["python3", "git", "forge", "cast", "anvil", "codex"]
-    sandbox_preflight = bubblewrap_preflight(refresh=True)
-    if "bwrap" in found:
-        found["bwrap"]["sandbox_preflight"] = sandbox_preflight
+    core = ["python3", "git", "forge", "cast", "anvil"]
     echidna_version = found["echidna"].get("version") or ""
     version_match = re.search(r"\b(\d+)\.(\d+)(?:\.(\d+))?", echidna_version)
     echidna_tuple = tuple(int(item or 0) for item in version_match.groups()) if version_match else (0, 0, 0)
@@ -373,21 +423,19 @@ def doctor() -> dict[str, Any]:
         "ityfuzz_deployed_state": found["ityfuzz"]["available"],
         "symbolic": found["halmos"]["available"],
         "static_analysis": found["wake"]["available"] or found["slither"]["available"],
-        "isolated_lanes": sandbox_preflight["usable"],
     }
     return {
-        "runtime_version": "4.4.0",
+        "runtime_version": "5.0.0",
         "platform": os.uname().sysname,
         "tools": found,
         "core_ready": core_ready,
         "required_ready": core_ready,
         "capabilities": capabilities,
-        "codex_lane_sandbox_ready": sandbox_preflight["usable"],
         "notes": [
-            "Only the Foundry/Codex core gates general readiness; specialist backends are capability-gated.",
+            "Only Python, Git, and Foundry/Anvil gate general runtime readiness; specialist backends are capability-gated.",
             "Echidna live campaign control requires version 2.4 or newer.",
             "No environment-variable values were read or emitted by doctor.",
-            "A false codex_lane_sandbox_ready value blocks real population lanes as an explicit environment limitation.",
+            "The runtime never probes or launches a Codex subprocess; built-in subagents belong to the current chat.",
         ],
     }
 

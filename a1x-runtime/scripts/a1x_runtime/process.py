@@ -17,6 +17,48 @@ from .records import utc_now
 
 ENV_TOKEN = re.compile(r"^@env:([A-Z_][A-Z0-9_]*)$")
 SAFE_ENV = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "USER", "LOGNAME", "SHELL")
+MODEL_EXECUTABLES = {
+    "aider", "amp", "claude", "codex", "cursor-agent", "gemini", "goose",
+    "llm", "opencode", "qwen-code",
+}
+
+
+def reject_model_argv(argv: list[str]) -> None:
+    """Keep deterministic runtime commands from becoming a hidden model transport."""
+    if not argv:
+        raise ValidationError("empty command")
+    requested = Path(argv[0]).expanduser()
+    resolved = shutil.which(argv[0])
+    if resolved is None and requested.exists():
+        resolved = str(requested)
+    names = {requested.name.lower()}
+    if resolved is not None:
+        names.add(Path(resolved).resolve().name.lower())
+    names = {name[:-4] if name.endswith(".exe") else name for name in names}
+    blocked = names & MODEL_EXECUTABLES
+    if blocked:
+        executable_name = sorted(blocked)[0]
+        raise ValidationError(
+            f"model executable is forbidden in the deterministic A1X runtime: {executable_name}; "
+            "use a visible built-in Codex subagent in the current chat"
+        )
+    executable_name = requested.name.lower()
+    if executable_name.endswith(".exe"):
+        executable_name = executable_name[:-4]
+    if executable_name == "env":
+        for argument in argv[1:]:
+            if argument.startswith("-") or ("=" in argument and not argument.startswith("/")):
+                continue
+            reject_model_argv([argument])
+            break
+    opaque_flags = {"bash": {"-c"}, "sh": {"-c"}, "zsh": {"-c"}, "dash": {"-c"},
+                    "python": {"-c"}, "python3": {"-c"}, "node": {"-e", "--eval"},
+                    "deno": {"eval"}, "ruby": {"-e"}}
+    forbidden_inline = opaque_flags.get(executable_name, {"-c"} if executable_name.startswith("python") else set())
+    if any(flag in argv[1:] for flag in forbidden_inline):
+        raise ValidationError(
+            "opaque inline programs are forbidden in sealed A1X runs; use a declared, reviewable script or harness file"
+        )
 
 
 @dataclass
@@ -49,8 +91,7 @@ def secret_names(argv: Iterable[str], pass_env: Iterable[str]) -> set[str]:
 
 
 def resolve_argv(argv: list[str], source_env: dict[str, str]) -> tuple[list[str], list[bytes]]:
-    if not argv:
-        raise ValidationError("empty command")
+    reject_model_argv(argv)
     resolved: list[str] = []
     secrets: list[bytes] = []
     for argument in argv:
@@ -69,6 +110,7 @@ def resolve_argv(argv: list[str], source_env: dict[str, str]) -> tuple[list[str]
     executable = shutil.which(resolved[0], path=source_env.get("PATH"))
     if not executable:
         raise ValidationError(f"executable not found: {argv[0]}")
+    reject_model_argv([executable])
     resolved[0] = executable
     return resolved, secrets
 

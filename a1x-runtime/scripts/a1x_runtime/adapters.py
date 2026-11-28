@@ -85,7 +85,7 @@ def probe_target(root: Path) -> dict[str, Any]:
         "schema": schema_for(root), "kind": "target-capability-probe", "created_at": utc_now(),
         "source_sha256": path_digest(source), "machine": inventory, "backends": results,
         "routing_rule": "never route to a backend whose target probe is false",
-        "isolation_rule": "backend toolchains fetched during probing are copied into campaign-scoped lane caches",
+        "isolation_rule": "backend toolchains fetched during probing are copied into campaign-scoped caches",
     }
     write_json_atomic(root / "capabilities" / "capabilities.json", record)
     event(root, "capabilities.probed", ready=[name for name, value in results.items() if value["ready"]])

@@ -15,6 +15,26 @@ def _require(path: Path, description: str) -> dict[str, Any]:
     return read_json(path)
 
 
+def _require_run_ledger_link(root: Path, run_id: str, investigation_id: str) -> str:
+    plan = _require(root / "runs" / run_id / "plan.json", "sealed run plan")
+    if str(plan.get("ledger_investigation_id") or "") != investigation_id:
+        raise ValidationError(f"{run_id} is not linked to candidate investigation {investigation_id}")
+    experiment_id = str(plan.get("ledger_experiment_id") or "")
+    if not experiment_id:
+        raise ValidationError(f"{run_id} must be linked to a canonical EXP ledger record")
+    from .ledger import show_record
+
+    experiment = show_record(root, experiment_id)
+    expected_ref = f"runs/{run_id}/plan.json"
+    if (
+        experiment.get("kind") != "EXP"
+        or investigation_id not in experiment.get("parents", [])
+        or expected_ref not in experiment.get("data", {}).get("runtime_refs", [])
+    ):
+        raise ValidationError(f"{run_id} EXP cross-link is incomplete")
+    return experiment_id
+
+
 def create_candidate(
     root: Path,
     *,
@@ -27,6 +47,8 @@ def create_candidate(
     reachability: str,
     property_statement: str,
     impact: str,
+    scope_id: str,
+    eligible_impact: str,
     implementation_verified: bool,
     configuration_verified: bool,
     actor_verified: bool,
@@ -40,9 +62,20 @@ def create_candidate(
     terminal_classes = {"asset-loss", "insolvency", "permanent-freeze", "integrity"}
     if terminal_impact and consequence_class not in terminal_classes:
         raise ValidationError("terminal impact cannot be declared for an intermediate authorization, governance, configuration, upgrade, role, liveness, or unknown consequence")
-    _require(root / "hypotheses" / f"{hypothesis_id}.json", "hypothesis")
+    from .ledger import require_scope_impact, show_record
+
+    require_scope_impact(root, scope_id, eligible_impact)
+    hypothesis = _require(root / "hypotheses" / f"{hypothesis_id}.json", "hypothesis")
+    ledger_investigation_id = str(hypothesis.get("ledger_investigation_id") or "")
+    if not ledger_investigation_id:
+        raise ValidationError("candidate hypothesis must be cross-linked to a canonical INV ledger record")
+    investigation = show_record(root, ledger_investigation_id)
+    if investigation.get("kind") != "INV" or scope_id not in investigation.get("scope", []):
+        raise ValidationError("candidate investigation must reference the selected active program scope")
+    support_experiment_id = _require_run_ledger_link(root, support_run, ledger_investigation_id)
     _require(root / "runs" / support_run / "receipt.json", "supporting run")
     if control_run:
+        _require_run_ledger_link(root, control_run, ledger_investigation_id)
         _require(root / "runs" / control_run / "receipt.json", "control run")
     if replay_id:
         _require(root / "replays" / f"{replay_id}.json", "replay")
@@ -61,6 +94,10 @@ def create_candidate(
         "reachability": reachability,
         "property": property_statement,
         "impact": impact,
+        "scope_id": scope_id,
+        "eligible_impact": eligible_impact,
+        "ledger_investigation_id": ledger_investigation_id,
+        "support_experiment_id": support_experiment_id,
         "consequence_class": consequence_class,
         "terminal_impact": terminal_impact,
         "expansion_round": None,
@@ -78,34 +115,22 @@ def create_candidate(
     }
     candidate_path = root / "candidates" / f"{candidate_id}.json"
     write_json_atomic(candidate_path, record)
-    event(root, "candidate.created", candidate_id=candidate_id, hypothesis_id=hypothesis_id)
-    # A candidate is a branch point, not a campaign stopping condition. Creating
-    # it mechanically opens independent impact, variant, refutation, and
-    # minimization lanes so a partial capability cannot silently terminate TTS.
-    from .controller import ensure_candidate_expansion
+    from .ledger import link_runtime_ref
 
-    try:
-        expansion = ensure_candidate_expansion(root, candidate_id)
-    except A1XError as exc:
-        # Evidence-bearing records survive orchestration and budget failures.
-        record["expansion_status"] = "blocked"
-        record["expansion_blocker"] = f"{type(exc).__name__}: {exc}"
-        record["expansion_blocker_kind"] = "budget" if isinstance(exc, BudgetError) else "tooling"
-        write_json_atomic(candidate_path, record)
-        event(root, "candidate.expansion-allocation-blocked", candidate_id=candidate_id, error_type=type(exc).__name__)
-        return record
-    except Exception as exc:
-        record["expansion_status"] = "blocked"
-        record["expansion_blocker"] = f"unexpected {type(exc).__name__}: {exc}"
-        record["expansion_blocker_kind"] = "tooling"
-        write_json_atomic(candidate_path, record)
-        event(root, "candidate.expansion-allocation-error", candidate_id=candidate_id, error_type=type(exc).__name__)
-        raise
-    record["expansion_round"] = expansion["id"]
-    record["expansion_status"] = "allocated"
-    record["expansion_blocker"] = None
-    record["expansion_blocker_kind"] = None
-    write_json_atomic(candidate_path, record)
+    link_runtime_ref(
+        root,
+        ledger_investigation_id,
+        f"candidates/{candidate_id}.json",
+        expected_kind="INV",
+        reason=f"promoted typed candidate {candidate_id}",
+        stage="candidate",
+        status="active",
+    )
+    event(root, "candidate.created", candidate_id=candidate_id, hypothesis_id=hypothesis_id)
+    # V5 records the branch but never allocates model processes. The primary
+    # investigator may open bounded ledger TASK records and visible built-in
+    # subagents when impact extension or independent challenge is warranted.
+    event(root, "candidate.follow-up-deferred-to-session", candidate_id=candidate_id)
     return record
 
 
@@ -214,7 +239,7 @@ def check_gates(root: Path, candidate_id: str) -> dict[str, Any]:
         from .blind_review import qualifies
 
         independent_review = any(qualifies(root, review_id, candidate_id) for review_id in candidate.get("blind_reviews", []))
-        review_requirement = "fresh-process mechanically blind confirming review"
+        review_requirement = "rationale-withheld confirming review by a distinct visible built-in subagent"
     gates = [
         ("E0", bool(candidate.get("root_cause") and candidate.get("hypothesis_id")), "recorded mechanism and hypothesis"),
         ("E1", bool(candidate.get("code_evidence")), "exact writer/guard/consumer code evidence recorded"),
@@ -271,6 +296,14 @@ def promote_validated(root: Path, candidate_id: str) -> dict[str, Any]:
     if result["mechanical_evidence_ceiling"] != "E6":
         raise ValidationError("candidate has not passed every E0-E6 gate")
     path = root / "candidates" / f"{candidate_id}.json"
+    candidate = read_json(path)
+    from .ledger import require_scope_impact
+
+    require_scope_impact(
+        root,
+        str(candidate.get("scope_id") or ""),
+        str(candidate.get("eligible_impact") or ""),
+    )
     changed = False
     with exclusive_lock(root):
         candidate = read_json(path)

@@ -14,9 +14,7 @@ from a1x_runtime.benchmark import attach_benchmark_trial, compare_benchmark, cre
 from a1x_runtime.artifacts import ingest_artifact, verify_artifact
 from a1x_runtime.atomic import read_json, write_json_atomic
 from a1x_runtime.blind_review import (
-    execute_blind_review,
     prepare_blind_review,
-    qualifies,
 )
 from a1x_runtime.campaign import add_hypothesis, add_obligation, init_campaign, migrate_campaign
 from a1x_runtime.continuity import create_continuation_contract, record_continuation_attempt
@@ -832,7 +830,7 @@ class A1XV4Test(unittest.TestCase):
         unrelated_b = self._closure_handoff("LANE-0003", "LINEAGE-b")
         child_id = "ROUND-9100"
         child_dir = self.root / "scale" / child_id
-        child_dir.mkdir()
+        child_dir.mkdir(parents=True)
         child_plan = {
             "id": child_id,
             "status": "partial",
@@ -917,21 +915,11 @@ class A1XV4Test(unittest.TestCase):
 
     def test_mcp_facade_has_no_private_runtime_state(self) -> None:
         response = dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-        self.assertEqual(response["result"]["serverInfo"]["version"], "4.4.0")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "5.0.0")
         tools = dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         tool_names = {tool["name"] for tool in tools["result"]["tools"]}
         self.assertIn("campaign_show", tool_names)
         self.assertIn("explorer_retrieve", tool_names)
-
-    def test_mechanical_blind_review_runs_fresh_process(self) -> None:
-        (self.root / "candidates" / "CAND-0001.json").write_text(json.dumps({"id": "CAND-0001", "property": "assets remain backed", "support_run": "RUN-0001", "control_run": "RUN-0002", "replay_id": "REPLAY-0001", "fidelity": {}}), encoding="utf-8")
-        (self.root / "replays" / "REPLAY-0001.json").write_text(json.dumps({"id": "REPLAY-0001", "passed": True}), encoding="utf-8")
-        prepared = prepare_blind_review(self.root, "CAND-0001")
-        script = Path(self.temporary.name) / "reviewer.py"
-        script.write_text("import json,sys\njson.load(open(sys.argv[1]))\njson.dump({'verdict':'confirmed','reproduced':True,'challenges':['causality','actor','impact']},open(sys.argv[2],'w'))\n", encoding="utf-8")
-        completed = execute_blind_review(self.root, prepared["id"], argv=[sys.executable, str(script), "{packet}", "{output}"], timeout_seconds=30)
-        self.assertEqual(completed["status"], "completed")
-        self.assertTrue(qualifies(self.root, prepared["id"], "CAND-0001"))
 
     def test_equal_cost_evaluation_records_all_dimensions(self) -> None:
         costs = {"wall_seconds": 10, "cpu_core_seconds": 20, "peak_memory_bytes": 1000, "llm_input_tokens": 30, "llm_output_tokens": 10, "rpc_requests": 2, "evm_executions": 500}
@@ -1025,7 +1013,7 @@ class MigrationTest(unittest.TestCase):
             self.assertTrue((root / "events.jsonl").read_bytes().startswith(legacy))
             self.assertTrue(verify_event_chain(root)["valid"])
 
-    def test_v43_to_v44_migration_is_additive(self) -> None:
+    def test_v43_to_v5_migration_is_additive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             source = base / "source"
@@ -1046,7 +1034,7 @@ class MigrationTest(unittest.TestCase):
             result = migrate_campaign(root)
             self.assertTrue(result["migrated"])
             self.assertEqual(result["migration"]["from_runtime_version"], "4.3.0")
-            self.assertEqual(result["campaign"]["runtime_version"], "4.4.0")
+            self.assertEqual(result["campaign"]["runtime_version"], "5.0.0")
             self.assertEqual(preserved.read_bytes(), before)
             self.assertTrue((root / "harnesses").is_dir())
             self.assertTrue((root / "orchestration" / "features.json").is_file())

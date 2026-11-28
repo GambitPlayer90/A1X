@@ -68,16 +68,20 @@ def start_fork(
     max_output_bytes: int,
     lane_id: str | None = None,
     round_id: str | None = None,
+    expected_block_hash: str | None = None,
 ) -> dict[str, Any]:
     campaign = require_campaign(root)
     chain = campaign["chain"]
     rpc_env = rpc_env if rpc_env is not None else chain.get("rpc_env")
     chain_id = chain_id if chain_id is not None else chain.get("chain_id")
     block_number = block_number if block_number is not None else chain.get("block_number")
+    expected_block_hash = expected_block_hash if expected_block_hash is not None else chain.get("block_hash")
     if not rpc_env or not chain_id or block_number is None:
         raise ValidationError("fork start requires rpc env name, chain id, and pinned block")
     if chain_id <= 0 or block_number < 0:
         raise ValidationError("fork chain id must be positive and block cannot be negative")
+    if expected_block_hash is not None and not re.fullmatch(r"0x[0-9a-fA-F]{64}", expected_block_hash):
+        raise ValidationError("expected fork block hash must be a 0x-prefixed 32-byte hash")
     if port < 0 or port > 65535:
         raise ValidationError("fork port must be 0 or between 1 and 65535")
     if startup_timeout <= 0 or max_output_bytes <= 0:
@@ -170,6 +174,11 @@ def start_fork(
         raise IntegrityError(
             f"fork identity mismatch: expected chain/block {chain_id}/{block_number}, got {observed_chain}/{observed_block}"
         )
+    if expected_block_hash is not None and str(observed_block_hash).lower() != expected_block_hash.lower():
+        _kill_and_reap(supervisor, signal.SIGKILL)
+        raise IntegrityError(
+            f"fork block hash mismatch: expected {expected_block_hash.lower()}, got {observed_block_hash}"
+        )
     base_snapshot = rpc_call(endpoint, "evm_snapshot")
     record = {
         "schema": schema_for(root),
@@ -181,13 +190,14 @@ def start_fork(
         "chain_id": chain_id,
         "block_number": block_number,
         "block_hash": observed_block_hash,
+        "expected_block_hash": expected_block_hash.lower() if expected_block_hash else None,
         "endpoint": endpoint,
         "port": selected_port,
         "upstream_proxy_port": proxy_port,
         "socket": str(socket_path),
         "upstream_secret_exposed": False,
         "rpc_policy": "credential-free-filtered-writable-local-fork",
-        "scope": "lane" if lane_id else "manual",
+        "scope": "legacy-lane" if lane_id else "session",
         "lane_id": lane_id,
         "round_id": round_id,
         "supervisor_pid": supervisor.pid,
@@ -195,6 +205,8 @@ def start_fork(
         "process_group": supervisor.pid,
         "snapshots": [{"snapshot_id": base_snapshot, "created_at": utc_now(), "role": "base"}],
         "logs": {"stdout": f"{fork_id}/stdout.log", "stderr": f"{fork_id}/stderr.log"},
+        "visibility": "disclosed-session-owned-tool-process",
+        "stop_command": f"a1x fork stop --root {root} --fork {fork_id}",
     }
     write_json_atomic(root / "forks" / f"{fork_id}.json", record)
     event(root, "fork.started", fork_id=fork_id, chain_id=chain_id, block_number=block_number, port=selected_port, lane_id=lane_id, round_id=round_id)
@@ -217,7 +229,11 @@ def fork_status(root: Path, fork_id: str) -> dict[str, Any]:
     return {
         "fork_id": fork_id, "recorded_status": state["status"], "process_alive": alive,
         "rpc_ready": rpc_ok, "uds_ready": Path(str(state.get("socket", ""))).exists(),
-        "block_number": observed_block, "rpc_accounting": accounting,
+        "supervisor_pid": state.get("supervisor_pid"), "endpoint": state.get("endpoint"),
+        "chain_id": state.get("chain_id"), "pinned_block": state.get("block_number"),
+        "pinned_block_hash": state.get("block_hash"), "observed_block": observed_block,
+        "logs": state.get("logs"), "stop_command": state.get("stop_command"),
+        "rpc_accounting": accounting,
     }
 
 

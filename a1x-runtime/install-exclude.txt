@@ -1,0 +1,14 @@
+# Quarantined V4 external-worker implementation; not part of the V5 skill.
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+scripts/a1x_runtime/scale.py
+scripts/a1x_runtime/rsa.py
+scripts/a1x_runtime/lane_fork.py
+scripts/a1x_runtime/lane_fork_mcp.py
+scripts/a1x-lane-fork
+scripts/a1x-lane-fork-mcp
+scripts/schemas/lane-handoff.schema.json
+references/scaling-runtime.md
+references/v4-architecture.md

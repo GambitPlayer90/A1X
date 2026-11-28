@@ -11,8 +11,7 @@ from . import __version__
 from .adapters import capability_matrix, probe_target
 from .artifacts import ingest_artifact, materialize_artifact, verify_artifact
 from .actor_programs import create_actor_program, record_actor_execution, verify_actor_execution
-from .blind_review import execute_blind_review, prepare_blind_review
-from .benchmark import attach_benchmark_trial, compare_benchmark, create_benchmark_suite
+from .blind_review import prepare_blind_review, record_in_session_review
 from .campaign import add_hypothesis, add_obligation, doctor, init_campaign, migrate_campaign, save_doctor, show_campaign
 from .candidates import add_review, check_gates, create_candidate, promote_validated
 from .controller import (
@@ -20,8 +19,6 @@ from .controller import (
     add_impact,
     assess_completion,
     close_campaign,
-    ensure_bootstrap,
-    ensure_candidate_expansion,
     record_coverage,
     resolve_frontier,
     resolve_impact,
@@ -31,10 +28,9 @@ from .composition import compose_components, create_component_contract, verify_c
 from .errors import A1XError
 from .evidence_bundles import create_bundle, load_bundle, verify_bundle
 from .explorer import retrieve_verified_contract, show_retrieval
-from .evaluation import adjudicate_trial, evaluation_summary, record_trial
-from .features import apply_profile, feature_record, set_feature
 from .forks import fork_status, revert_fork, snapshot_fork, start_fork, stop_fork
 from .harness_coverage import create_expansion_task, create_harness_model, record_harness_telemetry, resolve_expansion_task, verify_harness_model
+from .ledger import add_record, brief as ledger_brief, migrate_v4 as migrate_v4_ledger, query_ledger, show_record, update_record, verify_ledger
 from .replay import prepare_replay, verify_replay
 from .operations import propose_operation, recommend_next, transition_operation
 from .mcp_server import serve_stdio
@@ -43,11 +39,8 @@ from .prerequisite_graph import create_backtrack_branch, create_prerequisite_gra
 from .recon import active_recon, create_recon_pack
 from .research_progress import record_progress, verify_progress
 from .records import verify_event_chain
-from .rsa import build_compatibility_graph, create_evidence_round
 from .runs import execute_run, observe_run, plan_run
-from .scale import aggregate_round, auto_select_frontier, bind_lane_runtime_evidence, create_recombination_round, create_round, evolve_population, merge_population, run_round, select_frontier
 from .security_oracles import create_security_oracle, evaluate_security_oracle, standard_oracle_profile, verify_oracle_evaluation
-from .scheduling import resource_snapshot, scheduling_state
 from .solver_adapters import create_solver_job, probe_solver_tools, register_external_solver_job, validate_solver_job, verify_solver_job
 from .surface_graph import build_surface_graph
 from .trace_facts import analyze_run_trace
@@ -78,23 +71,9 @@ def _tri_bool(value: str) -> bool | None:
 def _budget_dict(args: argparse.Namespace) -> dict[str, int]:
     return {
         "max_runs": args.max_runs,
-        "max_scale_lanes": args.max_scale_lanes,
-        "max_parallel": args.max_parallel,
         "default_run_timeout_seconds": args.default_run_timeout,
         "default_output_bytes": args.default_output_bytes,
     }
-
-
-def _drops(values: list[str]) -> dict[str, str]:
-    parsed: dict[str, str] = {}
-    for value in values:
-        if ":" not in value:
-            raise A1XError("--drop must use LANE-####:reason")
-        lane_id, reason = value.split(":", 1)
-        if not lane_id or not reason.strip():
-            raise A1XError("--drop must include a lane id and non-empty reason")
-        parsed[lane_id] = reason.strip()
-    return parsed
 
 
 def _metrics(values: list[str]) -> list[dict[str, str]]:
@@ -135,12 +114,51 @@ def _cmd_campaign_init(args: argparse.Namespace) -> Any:
         target=args.target,
         chain_id=args.chain_id,
         block_number=args.block,
+        block_hash=args.block_hash,
         rpc_env=args.rpc_env,
         authorization=args.authorization,
         budgets=_budget_dict(args),
     )
-    bootstrap = ensure_bootstrap(args.root, per_lane_timeout=args.scale_lane_timeout)
-    return {"campaign": campaign, "mandatory_bootstrap_round": bootstrap}
+    return {"campaign": campaign, "ledger": verify_ledger(args.root, repair_views=True)}
+
+
+def _parse_json_object(value: str, field: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise A1XError(f"{field} must be a JSON object: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise A1XError(f"{field} must be a JSON object")
+    return parsed
+
+
+def _cmd_ledger_add(args: argparse.Namespace) -> Any:
+    return add_record(
+        args.root,
+        kind=args.kind,
+        title=args.title,
+        statement=args.statement,
+        status=args.status,
+        priority=args.priority,
+        stage=args.stage,
+        parents=args.parent,
+        scope=args.scope,
+        evidence=args.evidence,
+        artifacts=args.artifact,
+        next_action=args.next_action,
+        owner=args.owner,
+        data=_parse_json_object(args.data, "--data"),
+    )
+
+
+def _cmd_ledger_update(args: argparse.Namespace) -> Any:
+    return update_record(
+        args.root,
+        args.id,
+        expected_revision=args.expected_revision,
+        changes=_parse_json_object(args.changes, "--changes"),
+        reason=args.reason,
+    )
 
 
 def _cmd_run_plan(args: argparse.Namespace) -> Any:
@@ -171,6 +189,7 @@ def _cmd_run_plan(args: argparse.Namespace) -> Any:
         extends_candidate_id=args.extends_candidate,
         extends_run=args.extends_run,
         extension_prefix=args.extension_prefix,
+        ledger_experiment_id=args.ledger,
     )
 
 
@@ -192,12 +211,10 @@ def build_parser() -> argparse.ArgumentParser:
     campaign_init.add_argument("--target", required=True)
     campaign_init.add_argument("--chain-id", type=int)
     campaign_init.add_argument("--block", type=int)
+    campaign_init.add_argument("--block-hash", help="expected 0x-prefixed 32-byte hash for the pinned block")
     campaign_init.add_argument("--rpc-env")
     campaign_init.add_argument("--authorization", required=True)
     campaign_init.add_argument("--max-runs", type=int, default=500)
-    campaign_init.add_argument("--max-scale-lanes", type=int, default=96)
-    campaign_init.add_argument("--max-parallel", type=int, default=4)
-    campaign_init.add_argument("--scale-lane-timeout", type=int, default=7200)
     campaign_init.add_argument("--default-run-timeout", type=int, default=1800)
     campaign_init.add_argument("--default-output-bytes", type=int, default=64 * 1024 * 1024)
     campaign_init.set_defaults(handler=_cmd_campaign_init)
@@ -210,6 +227,54 @@ def build_parser() -> argparse.ArgumentParser:
     campaign_verify = campaign_sub.add_parser("verify-events")
     campaign_verify.add_argument("--root", required=True, type=_root)
     campaign_verify.set_defaults(handler=lambda a: verify_event_chain(a.root))
+
+    ledger = commands.add_parser("ledger", help="operate the compact single-session hunt ledger")
+    ledger_sub = ledger.add_subparsers(dest="ledger_command", required=True)
+    ledger_add = ledger_sub.add_parser("add")
+    ledger_add.add_argument("--root", required=True, type=_root)
+    ledger_add.add_argument("--kind", required=True, choices=["SCOPE", "OBL", "INV", "EXP", "FACT", "TASK", "SYN"])
+    ledger_add.add_argument("--title", required=True)
+    ledger_add.add_argument("--statement", required=True)
+    ledger_add.add_argument("--status", default="open", choices=["open", "active", "blocked", "closed", "validated", "refuted", "out-of-scope", "not-applicable"])
+    ledger_add.add_argument("--priority", default="medium", choices=["low", "medium", "high", "critical"])
+    ledger_add.add_argument("--stage", choices=["lead", "hypothesis", "candidate", "validated", "refuted", "closed"])
+    ledger_add.add_argument("--parent", action="append", default=[])
+    ledger_add.add_argument("--scope", action="append", default=[])
+    ledger_add.add_argument("--evidence", action="append", default=[])
+    ledger_add.add_argument("--artifact", action="append", default=[])
+    ledger_add.add_argument("--next-action", default="")
+    ledger_add.add_argument("--owner", default="primary")
+    ledger_add.add_argument("--data", default="{}", help="kind-specific JSON object")
+    ledger_add.set_defaults(handler=_cmd_ledger_add)
+    ledger_update = ledger_sub.add_parser("update")
+    ledger_update.add_argument("--root", required=True, type=_root)
+    ledger_update.add_argument("--id", required=True)
+    ledger_update.add_argument("--expected-revision", required=True, type=int)
+    ledger_update.add_argument("--changes", required=True, help="JSON object containing fields to change")
+    ledger_update.add_argument("--reason", required=True)
+    ledger_update.set_defaults(handler=_cmd_ledger_update)
+    ledger_list = ledger_sub.add_parser("list")
+    ledger_list.add_argument("--root", required=True, type=_root)
+    ledger_list.add_argument("--kind", choices=["SCOPE", "OBL", "INV", "EXP", "FACT", "TASK", "SYN"])
+    ledger_list.add_argument("--status")
+    ledger_list.add_argument("--priority")
+    ledger_list.add_argument("--scope")
+    ledger_list.set_defaults(handler=lambda a: query_ledger(a.root, kind=a.kind, status=a.status, priority=a.priority, scope_id=a.scope))
+    ledger_show = ledger_sub.add_parser("show")
+    ledger_show.add_argument("--root", required=True, type=_root)
+    ledger_show.add_argument("--id", required=True)
+    ledger_show.set_defaults(handler=lambda a: show_record(a.root, a.id))
+    ledger_verify = ledger_sub.add_parser("verify")
+    ledger_verify.add_argument("--root", required=True, type=_root)
+    ledger_verify.add_argument("--repair-views", action="store_true")
+    ledger_verify.set_defaults(handler=lambda a: verify_ledger(a.root, repair_views=a.repair_views))
+    ledger_brief_parser = ledger_sub.add_parser("brief")
+    ledger_brief_parser.add_argument("--root", required=True, type=_root)
+    ledger_brief_parser.set_defaults(handler=lambda a: ledger_brief(a.root))
+    ledger_migrate = ledger_sub.add_parser("migrate-v4")
+    ledger_migrate.add_argument("--root", required=True, type=_root)
+    ledger_migrate.add_argument("--apply", action="store_true")
+    ledger_migrate.set_defaults(handler=lambda a: migrate_v4_ledger(a.root, apply=a.apply))
 
     artifact = commands.add_parser("artifact", help="manage immutable content-addressed evidence")
     artifact_sub = artifact.add_subparsers(dest="artifact_command", required=True)
@@ -245,20 +310,6 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_verify.add_argument("--evidence", required=True)
     evidence_verify.set_defaults(handler=lambda a: verify_bundle(a.root, a.evidence))
 
-    features = commands.add_parser("features", help="inspect or change v4.4 runtime feature flags")
-    features_sub = features.add_subparsers(dest="features_command", required=True)
-    features_show = features_sub.add_parser("show")
-    features_show.add_argument("--root", required=True, type=_root)
-    features_show.set_defaults(handler=lambda a: feature_record(a.root))
-    features_set = features_sub.add_parser("set")
-    features_set.add_argument("--root", required=True, type=_root)
-    features_set.add_argument("--name", required=True)
-    features_set.add_argument("--enabled", choices=["yes", "no"], required=True)
-    features_set.set_defaults(handler=lambda a: set_feature(a.root, name=a.name, enabled=a.enabled == "yes"))
-    features_profile = features_sub.add_parser("profile")
-    features_profile.add_argument("--root", required=True, type=_root)
-    features_profile.add_argument("--name", choices=["v4.3.0-frozen", "v4.4.0-integrity", "v4.4.0-full"], required=True)
-    features_profile.set_defaults(handler=lambda a: apply_profile(a.root, name=a.name))
 
     continuation = commands.add_parser("continuation", help="manage executable parent-to-child continuation contracts")
     continuation_sub = continuation.add_subparsers(dest="continuation_command", required=True)
@@ -335,7 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
     prerequisite_resolve.add_argument("--attempt", required=True)
     prerequisite_resolve.set_defaults(handler=lambda a: resolve_backtrack_branch(a.root, a.branch, attempt_id=a.attempt))
 
-    component = commands.add_parser("component", help="define and execute three-topology RSA component composition")
+    component = commands.add_parser("component", help="define and execute sequential, nested, and temporal attack composition")
     component_sub = component.add_subparsers(dest="component_command", required=True)
     component_create = component_sub.add_parser("create")
     component_create.add_argument("--root", required=True, type=_root)
@@ -443,30 +494,6 @@ def build_parser() -> argparse.ArgumentParser:
     harness_verify.add_argument("--harness", required=True)
     harness_verify.set_defaults(handler=lambda a: verify_harness_model(a.root, a.harness))
 
-    scheduling = commands.add_parser("scheduling", help="inspect fair lineage allocation and aggregate resource use")
-    scheduling_sub = scheduling.add_subparsers(dest="scheduling_command", required=True)
-    scheduling_show = scheduling_sub.add_parser("show")
-    scheduling_show.add_argument("--root", required=True, type=_root)
-    scheduling_show.set_defaults(handler=lambda a: scheduling_state(a.root))
-    scheduling_resources = scheduling_sub.add_parser("resources")
-    scheduling_resources.add_argument("--root", required=True, type=_root)
-    scheduling_resources.set_defaults(handler=lambda a: resource_snapshot(a.root))
-
-    benchmark = commands.add_parser("benchmark", help="compare frozen, integrity-only, and full policies under one resource envelope")
-    benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
-    benchmark_create = benchmark_sub.add_parser("create")
-    benchmark_create.add_argument("--root", required=True, type=_root)
-    benchmark_create.add_argument("--json", required=True, type=_root)
-    benchmark_create.set_defaults(handler=lambda a: create_benchmark_suite(a.root, _load_json(a.json)))
-    benchmark_attach = benchmark_sub.add_parser("attach")
-    benchmark_attach.add_argument("--root", required=True, type=_root)
-    benchmark_attach.add_argument("--benchmark", required=True)
-    benchmark_attach.add_argument("--trial", required=True)
-    benchmark_attach.set_defaults(handler=lambda a: attach_benchmark_trial(a.root, benchmark_id=a.benchmark, trial_id=a.trial))
-    benchmark_compare = benchmark_sub.add_parser("compare")
-    benchmark_compare.add_argument("--root", required=True, type=_root)
-    benchmark_compare.add_argument("--benchmark", required=True)
-    benchmark_compare.set_defaults(handler=lambda a: compare_benchmark(a.root, a.benchmark))
 
     recon = commands.add_parser("recon", help="manage immutable versioned Recon Packs")
     recon_sub = recon.add_subparsers(dest="recon_command", required=True)
@@ -532,43 +559,7 @@ def build_parser() -> argparse.ArgumentParser:
     operation_recommend.add_argument("--backend", action="append", required=True)
     operation_recommend.set_defaults(handler=lambda a: recommend_next(a.root, blocker=a.blocker, available_backends=a.backend))
 
-    rsa = commands.add_parser("rsa", help="build semantic evidence compatibility graphs")
-    rsa_sub = rsa.add_subparsers(dest="rsa_command", required=True)
-    rsa_graph = rsa_sub.add_parser("graph")
-    rsa_graph.add_argument("--root", required=True, type=_root)
-    rsa_graph.add_argument("--evidence", action="append", required=True)
-    rsa_graph.add_argument("--idempotency-key")
-    rsa_graph.add_argument("--campaign-epoch", type=int)
-    rsa_graph.set_defaults(handler=lambda a: build_compatibility_graph(a.root, a.evidence, idempotency_key=a.idempotency_key, campaign_epoch=a.campaign_epoch))
-    rsa_spawn = rsa_sub.add_parser("spawn")
-    rsa_spawn.add_argument("--root", required=True, type=_root)
-    rsa_spawn.add_argument("--evidence", action="append", required=True)
-    rsa_spawn.add_argument("--children", type=int, default=3)
-    rsa_spawn.add_argument("--fresh-lanes", type=int, default=1)
-    rsa_spawn.add_argument("--per-lane-timeout", type=int, default=7200)
-    rsa_spawn.set_defaults(handler=lambda a: create_evidence_round(a.root, a.evidence, children=a.children, fresh_lanes=a.fresh_lanes, per_lane_timeout=a.per_lane_timeout))
 
-    evaluate = commands.add_parser("evaluate", help="record equal-cost incident regression trials")
-    evaluate_sub = evaluate.add_subparsers(dest="evaluate_command", required=True)
-    evaluate_record = evaluate_sub.add_parser("record")
-    evaluate_record.add_argument("--root", required=True, type=_root)
-    evaluate_record.add_argument("--incident", required=True)
-    evaluate_record.add_argument("--configuration", required=True)
-    evaluate_record.add_argument("--outcome", required=True)
-    evaluate_record.add_argument("--costs", required=True, type=_root)
-    evaluate_record.add_argument("--evidence")
-    evaluate_record.add_argument("--notes", default="")
-    evaluate_record.set_defaults(handler=lambda a: record_trial(a.root, incident=a.incident, configuration=a.configuration, outcome=a.outcome, costs=_load_json(a.costs), evidence_id=a.evidence, notes=a.notes))
-    evaluate_adjudicate = evaluate_sub.add_parser("adjudicate")
-    evaluate_adjudicate.add_argument("--root", required=True, type=_root)
-    evaluate_adjudicate.add_argument("--trial", required=True)
-    evaluate_adjudicate.add_argument("--outcome", required=True)
-    evaluate_adjudicate.add_argument("--evidence", required=True)
-    evaluate_adjudicate.add_argument("--notes", default="")
-    evaluate_adjudicate.set_defaults(handler=lambda a: adjudicate_trial(a.root, trial_id=a.trial, outcome=a.outcome, evidence_id=a.evidence, notes=a.notes))
-    evaluate_summary_parser = evaluate_sub.add_parser("summary")
-    evaluate_summary_parser.add_argument("--root", required=True, type=_root)
-    evaluate_summary_parser.set_defaults(handler=lambda a: evaluation_summary(a.root))
 
     prestate = commands.add_parser("prestate", help="serve pinned read-only RPC through a Unix socket")
     prestate_sub = prestate.add_subparsers(dest="prestate_command", required=True)
@@ -592,17 +583,19 @@ def build_parser() -> argparse.ArgumentParser:
     obligation_sub = obligation.add_subparsers(dest="obligation_command", required=True)
     obligation_add = obligation_sub.add_parser("add")
     obligation_add.add_argument("--root", required=True, type=_root)
+    obligation_add.add_argument("--ledger", required=True, help="canonical OBL ledger record")
     obligation_add.add_argument("--title", required=True)
     obligation_add.add_argument("--statement", required=True)
     obligation_add.add_argument("--boundary", required=True)
     obligation_add.add_argument("--units", required=True)
     obligation_add.add_argument("--oracle", required=True)
-    obligation_add.set_defaults(handler=lambda a: add_obligation(a.root, title=a.title, statement=a.statement, boundary=a.boundary, units=a.units, oracle=a.oracle))
+    obligation_add.set_defaults(handler=lambda a: add_obligation(a.root, title=a.title, statement=a.statement, boundary=a.boundary, units=a.units, oracle=a.oracle, ledger_obligation_id=a.ledger))
 
     hypothesis = commands.add_parser("hypothesis", help="record falsifiable mechanisms")
     hypothesis_sub = hypothesis.add_subparsers(dest="hypothesis_command", required=True)
     hypothesis_add = hypothesis_sub.add_parser("add")
     hypothesis_add.add_argument("--root", required=True, type=_root)
+    hypothesis_add.add_argument("--ledger", required=True, help="canonical INV ledger record")
     hypothesis_add.add_argument("--obligation", required=True)
     hypothesis_add.add_argument("--mechanism", required=True)
     hypothesis_add.add_argument("--sequence", required=True)
@@ -618,6 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
             support_prediction=a.support_prediction,
             refute_prediction=a.refute_prediction,
             next_action=a.next_action,
+            ledger_investigation_id=a.ledger,
         )
     )
 
@@ -625,6 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_sub = run.add_subparsers(dest="run_command", required=True)
     run_plan_parser = run_sub.add_parser("plan")
     run_plan_parser.add_argument("--root", required=True, type=_root)
+    run_plan_parser.add_argument("--ledger", required=True, help="canonical EXP ledger record parented by the hypothesis INV")
     run_plan_parser.add_argument("--hypothesis", required=True)
     run_plan_parser.add_argument("--class", dest="run_class", required=True, choices=["candidate", "control", "repair", "fuzz", "solve", "recon"])
     run_plan_parser.add_argument("--cwd", required=True, type=_root)
@@ -679,6 +674,7 @@ def build_parser() -> argparse.ArgumentParser:
     fork_start.add_argument("--rpc-env")
     fork_start.add_argument("--chain-id", type=int)
     fork_start.add_argument("--block", type=int)
+    fork_start.add_argument("--block-hash", help="expected hash; defaults to the campaign pin")
     fork_start.add_argument("--port", type=int, default=0)
     fork_start.add_argument("--startup-timeout", type=int, default=30)
     fork_start.add_argument("--max-output-bytes", type=int, default=16 * 1024 * 1024)
@@ -688,6 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
             rpc_env=a.rpc_env,
             chain_id=a.chain_id,
             block_number=a.block,
+            expected_block_hash=a.block_hash,
             port=a.port,
             startup_timeout=a.startup_timeout,
             max_output_bytes=a.max_output_bytes,
@@ -730,6 +727,8 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_create.add_argument("--reachability", required=True)
     candidate_create.add_argument("--property", required=True)
     candidate_create.add_argument("--impact", required=True)
+    candidate_create.add_argument("--scope", required=True, help="active SCOPE ledger record")
+    candidate_create.add_argument("--eligible-impact", required=True, help="exact matching data.impacts entry from --scope")
     candidate_create.add_argument(
         "--consequence-class",
         required=True,
@@ -750,6 +749,8 @@ def build_parser() -> argparse.ArgumentParser:
             reachability=a.reachability,
             property_statement=a.property,
             impact=a.impact,
+            scope_id=a.scope,
+            eligible_impact=a.eligible_impact,
             implementation_verified=a.implementation_verified,
             configuration_verified=a.configuration_verified,
             actor_verified=a.actor_verified,
@@ -792,190 +793,26 @@ def build_parser() -> argparse.ArgumentParser:
     review_prepare.add_argument("--root", required=True, type=_root)
     review_prepare.add_argument("--candidate", required=True)
     review_prepare.set_defaults(handler=lambda a: prepare_blind_review(a.root, a.candidate))
-    review_execute = review_sub.add_parser("execute-blind")
-    review_execute.add_argument("--root", required=True, type=_root)
-    review_execute.add_argument("--review", required=True)
-    review_execute.add_argument("--timeout", type=int, default=1800)
-    review_execute.add_argument("command", nargs=argparse.REMAINDER)
-    review_execute.set_defaults(handler=lambda a: execute_blind_review(a.root, a.review, argv=a.command[1:] if a.command and a.command[0] == "--" else a.command, timeout_seconds=a.timeout))
-
-    scale = commands.add_parser("scale", help="orchestrate isolated Codex populations and evidence recombination")
-    scale_sub = scale.add_subparsers(dest="scale_command", required=True)
-    scale_create = scale_sub.add_parser("create")
-    scale_create.add_argument("--root", required=True, type=_root)
-    scale_create.add_argument("--prompt-file", required=True, type=_root)
-    scale_create.add_argument("--axis", action="append", required=True)
-    scale_create.add_argument("--hypothesis")
-    scale_create.add_argument("--per-lane-timeout", type=int, default=7200)
-    scale_create.set_defaults(handler=lambda a: create_round(a.root, prompt_file=a.prompt_file, axes=a.axis, hypothesis_id=a.hypothesis, per_lane_timeout=a.per_lane_timeout))
-    scale_run = scale_sub.add_parser("run")
-    scale_run.add_argument("--root", required=True, type=_root)
-    scale_run.add_argument("--round", required=True)
-    scale_run.add_argument("--parallel", type=int, default=2)
-    scale_run.add_argument("--codex-bin", default="codex")
-    scale_run.add_argument("--model")
-    scale_run.add_argument("--reasoning", choices=["low", "medium", "high", "xhigh", "max", "ultra"])
-    scale_run.add_argument("--sandbox", default="danger-full-access", choices=["read-only", "workspace-write", "danger-full-access"])
-    scale_run.add_argument("--allow-env-auth", action="store_true")
-    scale_run.add_argument("--lane-forks", choices=["auto", "require", "off"], default="auto")
-    scale_run.add_argument(
-        "--cyber-access-program",
-        choices=["standard", "daybreak_blue", "daybreak_red"],
-        default="standard",
-        help="Codex Trusted Access program requested for each authorized research lane",
+    review_complete = review_sub.add_parser("complete-in-session")
+    review_complete.add_argument("--root", required=True, type=_root)
+    review_complete.add_argument("--review", required=True)
+    review_complete.add_argument("--subagent-thread", required=True)
+    review_complete.add_argument("--result", required=True, type=_root)
+    review_complete.add_argument(
+        "--attest-visible-subagent",
+        action="store_true",
+        help="attest that /subagents shows this distinct built-in thread in the current CLI session; runtime records but cannot authenticate UI identity",
     )
-    scale_run.set_defaults(
-        handler=lambda a: run_round(
-            a.root,
-            round_id=a.round,
-            parallel=a.parallel,
-            codex_bin=a.codex_bin,
-            model=a.model,
-            reasoning=a.reasoning,
-            sandbox=a.sandbox,
-            allow_env_auth=a.allow_env_auth,
-            lane_forks=a.lane_forks,
-            cyber_access_program=a.cyber_access_program,
-        )
-    )
-    scale_aggregate = scale_sub.add_parser("aggregate")
-    scale_aggregate.add_argument("--root", required=True, type=_root)
-    scale_aggregate.add_argument("--round", required=True)
-    scale_aggregate.set_defaults(handler=lambda a: aggregate_round(a.root, round_id=a.round))
-    scale_bind = scale_sub.add_parser("bind-evidence", help="bind a lane handoff to sealed run, replay, continuation, and composition records")
-    scale_bind.add_argument("--root", required=True, type=_root)
-    scale_bind.add_argument("--round", required=True)
-    scale_bind.add_argument("--lane", required=True)
-    scale_bind.add_argument("--support-run", required=True)
-    scale_bind.add_argument("--support-replay", required=True)
-    scale_bind.add_argument("--support-artifact", required=True)
-    scale_bind.add_argument("--control-run")
-    scale_bind.add_argument("--control-replay")
-    scale_bind.add_argument("--control-artifact")
-    scale_bind.add_argument("--continuation")
-    scale_bind.add_argument("--attempt")
-    scale_bind.add_argument("--composition")
-    scale_bind.set_defaults(handler=lambda a: bind_lane_runtime_evidence(
+    review_complete.set_defaults(handler=lambda a: record_in_session_review(
         a.root,
-        round_id=a.round,
-        lane_id=a.lane,
-        support_run=a.support_run,
-        support_replay=a.support_replay,
-        support_artifact=a.support_artifact,
-        control_run=a.control_run,
-        control_replay=a.control_replay,
-        control_artifact=a.control_artifact,
-        continuation_id=a.continuation,
-        attempt_id=a.attempt,
-        composition_id=a.composition,
-    ))
-    scale_select = scale_sub.add_parser("select")
-    scale_select.add_argument("--root", required=True, type=_root)
-    scale_select.add_argument("--round", required=True)
-    scale_select.add_argument("--select", action="append", required=True)
-    scale_select.add_argument("--reserve", action="append", default=[])
-    scale_select.add_argument("--rationale", required=True)
-    scale_select.add_argument("--drop", action="append", default=[])
-    scale_select.set_defaults(
-        handler=lambda a: select_frontier(
-            a.root,
-            round_id=a.round,
-            selected=a.select,
-            rationale=a.rationale,
-            dropped=_drops(a.drop),
-            reserve=a.reserve,
-        )
-    )
-    scale_auto_select = scale_sub.add_parser("auto-select")
-    scale_auto_select.add_argument("--root", required=True, type=_root)
-    scale_auto_select.add_argument("--round", required=True)
-    scale_auto_select.add_argument("--maximum", type=int, default=6)
-    scale_auto_select.set_defaults(handler=lambda a: auto_select_frontier(a.root, round_id=a.round, maximum=a.maximum))
-    scale_recombine = scale_sub.add_parser("recombine")
-    scale_recombine.add_argument("--root", required=True, type=_root)
-    scale_recombine.add_argument("--parent-round", required=True)
-    scale_recombine.add_argument("--children", type=int, default=2)
-    scale_recombine.add_argument("--fresh-lanes", type=int, default=1)
-    scale_recombine.add_argument("--closure-lanes", type=int, default=1)
-    scale_recombine.add_argument("--per-lane-timeout", type=int, default=7200)
-    scale_recombine.set_defaults(
-        handler=lambda a: create_recombination_round(
-            a.root,
-            parent_round=a.parent_round,
-            children=a.children,
-            fresh_lanes=a.fresh_lanes,
-            closure_lanes=a.closure_lanes,
-            per_lane_timeout=a.per_lane_timeout,
-        )
-    )
-    scale_merge = scale_sub.add_parser("merge", help="merge a parent and fully bound child round into the next population pool")
-    scale_merge.add_argument("--root", required=True, type=_root)
-    scale_merge.add_argument("--parent-round", required=True)
-    scale_merge.add_argument("--child-round", required=True)
-    scale_merge.add_argument("--maximum", type=int, default=8)
-    scale_merge.set_defaults(handler=lambda a: merge_population(
-        a.root,
-        parent_round=a.parent_round,
-        child_round=a.child_round,
-        maximum=a.maximum,
+        a.review,
+        subagent_thread=a.subagent_thread,
+        result_path=a.result,
+        attest_visible_subagent=a.attest_visible_subagent,
     ))
 
-    scale_evolve = scale_sub.add_parser("evolve", help="run recursive aggregation generations with fresh diversity injections")
-    scale_evolve.add_argument("--root", required=True, type=_root)
-    scale_evolve.add_argument("--parent-round", required=True)
-    scale_evolve.add_argument("--generations", type=int, default=3)
-    scale_evolve.add_argument("--adaptive-extra-generations", type=int, default=3)
-    scale_evolve.add_argument("--children", type=int, default=3)
-    scale_evolve.add_argument("--fresh-lanes", type=int, default=1)
-    scale_evolve.add_argument("--closure-lanes", type=int, default=1)
-    scale_evolve.add_argument("--stagnation-rounds", type=int, default=2)
-    scale_evolve.add_argument("--parallel", type=int, default=2)
-    scale_evolve.add_argument("--codex-bin", default="codex")
-    scale_evolve.add_argument("--model")
-    scale_evolve.add_argument("--reasoning", choices=["low", "medium", "high", "xhigh", "max", "ultra"])
-    scale_evolve.add_argument("--sandbox", default="danger-full-access", choices=["read-only", "workspace-write", "danger-full-access"])
-    scale_evolve.add_argument("--allow-env-auth", action="store_true")
-    scale_evolve.add_argument("--lane-forks", choices=["auto", "require", "off"], default="auto")
-    scale_evolve.add_argument(
-        "--cyber-access-program",
-        choices=["standard", "daybreak_blue", "daybreak_red"],
-        default="standard",
-        help="Codex Trusted Access program requested for every RSA child lane",
-    )
-    scale_evolve.add_argument("--per-lane-timeout", type=int, default=7200)
-    scale_evolve.set_defaults(
-        handler=lambda a: evolve_population(
-            a.root,
-            parent_round=a.parent_round,
-            generations=a.generations,
-            adaptive_extra_generations=a.adaptive_extra_generations,
-            children=a.children,
-            fresh_lanes=a.fresh_lanes,
-            closure_lanes=a.closure_lanes,
-            stagnation_rounds=a.stagnation_rounds,
-            parallel=a.parallel,
-            codex_bin=a.codex_bin,
-            model=a.model,
-            reasoning=a.reasoning,
-            sandbox=a.sandbox,
-            allow_env_auth=a.allow_env_auth,
-            per_lane_timeout=a.per_lane_timeout,
-            lane_forks=a.lane_forks,
-            cyber_access_program=a.cyber_access_program,
-        )
-    )
-
-    controller = commands.add_parser("controller", help="enforce TTS activation, impact propagation, frontier closure, and campaign completion")
+    controller = commands.add_parser("controller", help="enforce impact, evidence, frontier, and campaign completion")
     controller_sub = controller.add_subparsers(dest="controller_command", required=True)
-    controller_bootstrap = controller_sub.add_parser("bootstrap")
-    controller_bootstrap.add_argument("--root", required=True, type=_root)
-    controller_bootstrap.add_argument("--per-lane-timeout", type=int, default=7200)
-    controller_bootstrap.set_defaults(handler=lambda a: ensure_bootstrap(a.root, per_lane_timeout=a.per_lane_timeout))
-    controller_expand = controller_sub.add_parser("expand")
-    controller_expand.add_argument("--root", required=True, type=_root)
-    controller_expand.add_argument("--candidate", required=True)
-    controller_expand.add_argument("--per-lane-timeout", type=int, default=7200)
-    controller_expand.set_defaults(handler=lambda a: ensure_candidate_expansion(a.root, a.candidate, per_lane_timeout=a.per_lane_timeout))
     controller_assess = controller_sub.add_parser("assess")
     controller_assess.add_argument("--root", required=True, type=_root)
     controller_assess.set_defaults(handler=lambda a: assess_completion(a.root))

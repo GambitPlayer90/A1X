@@ -1,95 +1,66 @@
 ---
 name: a1x-runtime
-description: Operate the deterministic A1X campaign runtime for an authorized Solidity/EVM investigation. Use when Codex must create durable campaign records, seal and execute commands, manage a pinned Anvil fork, preserve redacted evidence, replay a run, enforce impact and completion gates, or run isolated test-time-scaling and recursive self-aggregation populations. Exclude semantic vulnerability judgment, live-chain transactions, target selection, and external submission.
+description: Operate the deterministic local runtime for an authorized A1X Solidity/EVM investigation. Use to create/query the compact hunt ledger, seal and execute commands, manage a disclosed pinned Anvil fork, preserve evidence, replay runs, and enforce impact/completion gates. Exclude semantic vulnerability judgment, model orchestration, live-chain transactions, target selection, and submission.
 ---
 
-# Operate the A1X evidence runtime
+# A1X deterministic runtime
 
-Use the bundled `scripts/a1x` CLI for repeatable mechanics. Keep Codex responsible for protocol reasoning, experiment design, trace interpretation, and next-action selection. The runtime never decides whether a vulnerability is real.
+Use `scripts/a1x` for repeatable mechanics. The primary Codex chat owns reasoning, tool choice, subagents, experiment design, interpretation, and next actions.
 
-## Locate the CLI
+The runtime must never invoke `codex`, another model CLI, or a model API. The installed V5 runtime excludes the quarantined V4 scale/RSA/lane implementation. Built-in subagents are invoked by `$a1x` in the current chat, never by this script.
 
-Resolve this skill's directory from the active skills catalog, then set a task-specific variable:
+## Locate and inspect
 
-```bash
-A1X_CLI=/absolute/path/to/a1x-runtime/scripts/a1x
-"$A1X_CLI" --version
-```
+Resolve this skill directory from the skills catalog; do not guess an installation path. Use a task-specific shell variable, then run `scripts/a1x --version` and `scripts/a1x doctor`. Never print environment values while discovering RPC or explorer variable names.
 
-Do not guess an installation path. Do not expose RPC values while locating the CLI.
+Read [command-guide.md](references/command-guide.md) before first use and [artifact-contract.md](references/artifact-contract.md) before moving or interpreting evidence.
 
-## Start or resume a campaign
+## Campaign and ledger
 
-Read [command-guide.md](references/command-guide.md) before first use. Run `doctor`, then initialize one campaign outside target compilation paths. Pin source, chain, block, authorization statement, RPC variable **name**, and resource budgets. Resume an existing `campaign.json` instead of creating parallel state trees.
+Create one campaign outside target build paths. Initialization records source identity, authorization, chain/pinned block, budgets, event state, and a V5 ledger; it starts no fork, worker, or model process.
 
-Initialization also creates `ROUND-0001`, the mandatory blind four-axis population. Run and aggregate it before narrowing the hunt. Treat the hash-chained campaign event log as authoritative. Treat sealed plans, immutable objects, typed EvidenceBundles, Recon Packs, receipts, observations, replays, frontiers, impact branches, and controller assessments as evidence. Read [v4-architecture.md](references/v4-architecture.md) and [artifact-contract.md](references/artifact-contract.md) before modifying or moving them.
+The canonical research memory is `v5/ledger.json`, with deterministic `ledger.tsv` and `brief.md` projections. Use:
 
-Existing v3 campaigns remain readable and continue writing v1 records. Run `campaign migrate` explicitly before using v4-only evidence, recon, operation, RSA graph, or blind-review features. Migration anchors the untouched legacy event log; it never rewrites prior records.
+- `ledger add` for `SCOPE`, `OBL`, `INV`, `EXP`, `FACT`, `TASK`, and `SYN`;
+- `ledger list/show/brief` for context recovery and queries;
+- `ledger update --expected-revision` for concurrency-safe transitions;
+- `ledger verify --repair-views` to validate/rebuild projections;
+- `ledger migrate-v4` for an additive preview, then `--apply` to import legacy provenance without changing old records.
 
-Existing v4.3 campaigns migrate additively to v4.4. Prior materializations stay byte-for-byte unchanged. New continuation, trace, surface, composition, actor, oracle, harness, solver, scheduling, and benchmark records become hash-chained authoritative state.
+An `INV` keeps its identity as its stage changes. A `TASK` requires one bounded decision question. A `SYN` requires a revised testable attempt and next discriminator. Keep large logs and immutable run/replay/artifact data outside the ledger and reference them by ID/path/hash.
 
-## Record reasoning before execution
+## Runs and evidence
 
-1. Add a protocol obligation.
-2. Add a falsifiable hypothesis with supporting and refuting predictions.
-3. Create a sealed run plan before observing output.
-4. Declare every source, harness, configuration, corpus, or model input needed to replay the command.
-5. Execute the run once. Create a new run ID after changing the plan or inputs.
-6. Interpret the raw logs, then record an observation. Never let an exit code stand in for a security property.
+Record canonical `OBL`, `INV`, and one `EXP` per experiment before execution, then cross-link the typed obligation/hypothesis/run through their required `--ledger` arguments. Create a sealed run plan with property, support/refute predictions, exact inputs, command template, timeout, fork ID, and control relationship. Planning binds the run to its `EXP`; observation closes that experiment. Execute once; create a new run after changing plan or inputs. Record observations separately from raw output and interpretation.
 
-Use `@env:NAME` only as an entire command argument. The runtime resolves it at process launch, redacts it from captured output, and keeps the template in the manifest. Pass other environment variables only when the tool truly requires them.
+Use `@env:NAME` only as a whole argument. The runtime resolves it at launch, redacts captured output, and preserves the template. Do not store secret values.
 
-## Manage fork state
+Ingest immutable evidence objects, analyze deterministic trace facts, and build typed EvidenceBundles. Exit code, scanner output, symbolic witness, fork balance delta, or generated PoC alone is not a security conclusion.
 
-Use `prestate serve` to expose read-only pinned state over a Unix-domain socket. It rewrites dynamic block tags, rejects explicit blocks beyond the campaign pin, and rejects transaction/receipt/trace or block-hash references that resolve after the pin; this prevents historical blind-test leakage through an archive node. For scaled investigations, `scale run --lane-forks auto` creates one independently writable Anvil fork per lane when the campaign's RPC variable is available. The host supervisor keeps the upstream credential in memory, gives Anvil a pinned caching loopback proxy, and exposes only a filtered UDS to the lane. Before Codex starts, the coordinator probes the direct UDS helper, the HTTP bridge needed by Forge/Cast, and the lane-fork MCP server, then writes `.a1x/fork-transport.json`; direct/MCP failure stops the lane as an environment error instead of consuming research turns. The portable lane interface is `a1x-lane-fork rpc METHOD '[params]'`; use `a1x-lane-fork exec -- <command> ... @fork` for HTTP-only clients when its probe is ready. Never pass the upstream URL into a lane. Reset, upstream-retargeting, and node-metadata RPC methods are blocked. Use `--lane-forks require` when a fork is mandatory and `off` for source-only work.
+## Session-owned pinned fork
 
-Use `explorer retrieve` or the `explorer_retrieve` campaign MCP tool for host-side Etherscan V2 source/ABI retrieval. Only the environment variable name is recorded. Preserve the raw provider response as immutable evidence, and treat proxy implementation metadata as unpinned until verified at the campaign block.
+Use `fork start/status/snapshot/revert/stop` for a writable local Anvil fork. `fork start` must pin and verify chain, block, and block hash and return fork ID, loopback endpoint, supervisor PID, logs, and baseline snapshot. Announce these in the current chat. The upstream credential stays outside prompts/artifacts and the local endpoint must never broadcast to live assets.
 
-Never use the fork manager to broadcast a live transaction. A local fork endpoint must remain loopback-only.
+Serialize mutations on one fork. Revert to the baseline before independent experiments. Concurrent experiments need separate disclosed fork IDs. Stop every running fork before campaign closure; never use broad process kills.
 
-## Replay and gate candidates
+Use `prestate serve` only when a read-only pinned-state facade is needed. It rejects state beyond the campaign pin. Explorer retrieval is host-side and records only the credential variable name.
 
-Replay a sealed supporting run from a clean workspace at the recorded commit. Create a candidate only after reviewing its observation. Add a causal control, applicability fidelity, and clean replay. For v4, E6 requires `review prepare-blind` followed by `review execute-blind`; a manually asserted `independent=true` review cannot satisfy the gate.
+## Execution specialists
 
-`candidate gate` reports a **mechanical evidence ceiling**. Read [artifact-contract.md](references/artifact-contract.md) for E0-E6 semantics. The gate validates artifact relationships and declared outcomes; it cannot verify the protocol model, actor reachability, economics, novelty, or bounty eligibility.
+Use capability and target probes before routing. Foundry remains the concrete replay substrate. Use trace/surface/oracle/actor/component/harness/progress/solver commands for deterministic facts and bounded experimental state. Wake, Echidna, Medusa, Halmos/Z3, and ItyFuzz output remains provisional until source-faithful concrete execution and replay establish the claimed behavior.
 
-## Scale adaptively
+Stateful harness records must explicitly cover state writers, valuable consumers, callbacks, actor capabilities, lifecycle, and numerical boundaries, including unknown/not-applicable entries. Preserve action/precondition/state telemetry and replay minimized failures.
 
-Read [scaling-runtime.md](references/scaling-runtime.md). The bootstrap round is unconditional. Later rounds require a grounded mechanism, reached state, narrowed constraint, or discriminating observation. Provide distinct semantic axes, not temperature-only duplicates. The runtime creates isolated worktrees, runs `codex exec --json` with a strict output schema, preserves JSONL/process output, and strips API-key environment variables by default.
+## Replay, candidates, and closure
 
-Use `scale evolve` when one source-faithful partial witness needs closure, one reproducible conditional mechanism needs reachable setup, or two grounded components can compose. It combines protected `K=1W` witness closure, bounded `K=1R` reachability closure, sequential/nested/temporal `K=2` children, reserve rotation, fresh-lane injection, family-first allocation, and exact artifact/sequence deduplication. K=1R requires an evidence-backed unprivileged writer path toward the artificial predicate. Runtime-owned lineages and stable prerequisite IDs control progress; lane IDs, round IDs, free-text family overlap, new unresolved prose, or unrelated fresh discoveries cannot reset a stalled lineage. Fair attempt-aware selection prevents waiting lineages from being counted stagnant or permanently starved. Verified witness/information progress may use the bounded adaptive-depth allowance. A protected closure failure receives a bounded retry and remains explicit if unresolved. Retention remains fail-closed and lane-unique when anchors are weak. Children receive read-only exported parent artifacts, not only prose. Use typed evidence and `rsa graph` when composing across backends.
+Replay support and control runs from clean recorded inputs. Candidate gates provide a mechanical evidence ceiling; they cannot validate the protocol model, attacker capabilities, economics, novelty, or bounty eligibility.
 
-A lane-authored command, log, replay claim, or control file never promotes itself to E3/E4. Before aggregation can select executed work, reproduce the lane experiment as a sealed runtime run, record its observation, verify a clean replay, and use `scale bind-evidence` to bind the matching run artifact. E4 additionally requires a sealed paired causal-control run and replay. K=1 binding requires the verified continuation contract and attempt whose extension run/replay are the same bound support pair; K=2 binding requires the executed composition record for the same run/replay and exact parent lineages. `scale evolve` stops with `runtime-evidence-binding-required` at this host-review boundary. Bind every surviving child, use `scale merge` to form the next population pool, and continue from that pool. Never convert that pause into an operational failure or semantic refutation.
+Record downstream impact properties and exact evidence. High-consequence claims require clean replay and an impact-specific causal control. Refutations require execution or a mechanically anchored impossibility proof.
 
-For protected work, create an executable continuation contract. Reproduce the parent run and inherited assertions first. Any semantic advancement then requires a distinct observed extension run and its clean replay. Use a transaction checkpoint only between committed transactions; use a trace waypoint for callbacks or other within-transaction state and replay the entire top-level transaction. Conditional mechanisms can receive research allocation without evidence promotion.
+`controller assess` checks research continuity, ledger/scope/impact state, evidence integrity, unresolved bounded work, candidate/impact gates, and process cleanup. V5 has no bootstrap lanes, populations, candidate-expansion lanes, or RSA generations. `controller close` requires a matching clean, open-risk, budget-exhausted, or environment-blocked disposition.
 
-Use `surface build` and `trace analyze` for deterministic fork/code/trace facts, `actors` and `component` for executable multi-actor and three-topology composition, `harness` for protocol-surface/action coverage and bounded expansion, `progress` for separate witness and information progress, and `solver` for bounded exact/Z3 or capability-gated external jobs. Specialist output remains a candidate until concrete Foundry execution and replay.
+## Recovery
 
-## Recover without losing research state
+Classify tool, compiler, RPC, permission, sandbox, and backend failures as environment/tooling observations, never semantic refutations. Preserve the exact failed operation and artifact, repair or reroute, and retry the same discriminator when warranted. Verify ledger, event chain, artifact hashes, fork status, and replay state after interruption.
 
-Treat runtime and tool failures as classified observations, never as semantic refutations:
-
-- On SIGINT/SIGTERM, allow `scale run` to cooperatively stop lane process groups and their disposable forks. Resume the same partial round; do not create a replacement round merely to escape stale state.
-- Before manually stopping a fork, verify that its recorded round controller is no longer alive. Stop only that campaign's `running` fork IDs. Never use a broad process kill as campaign recovery.
-- A permission, approval, sandbox, MCP-startup, RPC-transport, compiler, missing-dependency, or backend crash is an `environment-blocked`/backend-capability result. Preserve the hypothesis unchanged, record the exact failed operation and artifact, repair or route to a compatible backend, then rerun the same discriminator.
-- If a target builds in Foundry but fails Wake/crytic-compile/Echidna because of `via-ir`, mixed compilers, Vyper, remappings, or missing packages, record the target-specific `failed_reason` in the capability snapshot. Continue with Foundry and compatible specialists; machine-level installation is not target readiness.
-- A failed baseline or withheld incident PoC does not invalidate independently reproduced behavior when the failure is packaging or dependency related. Report the baseline failure separately and do not inflate the independent evidence level.
-- Preserve an executed near-miss when it establishes a primitive, waypoint, constraint, reachable prefix, or exact blocker. RSA may inherit it. Refute only the mechanism actually falsified; never erase sibling parents or broader mechanism families through an incompatible composition.
-
-After any recovery, verify the event chain, round receipt, fork statuses, and artifact hashes before allocating more lanes. A repair is complete only when no stale controller ownership or campaign fork remains.
-
-Run `capability probe` per target. Machine installation never implies target compatibility. The probe's immutable lane copy controls routing, campaign-scoped compiler caches are copied into lane homes, and approved executables remain available through the sanitized PATH. When Wake passes the target probe, scaling injects a lane-local stdio `wake-lane` MCP server rooted at `target/`. Route each unresolved causal edge through `operation propose` and evented transitions. Foundry is the final replay substrate; Wake is preferred for independent Python economic models; Echidna 2.4 is preferred for interactive campaign steering; Medusa, Halmos, and ItyFuzz are capability-gated specialists. Read [backend-routing.md](references/backend-routing.md).
-
-## Propagate impact and close
-
-Candidate creation automatically allocates four independent expansion lanes. Record downstream consumers for every non-rejected candidate with `impact add`; there is no authority or terminal-impact bypass. Register the exact downstream property. A demonstrated branch requires a property-violating run and matching replay; high-consequence promotion additionally requires a distinct control run testing that same property. High-consequence refutation requires execution or an anchored unreachability proof. Missing promotion evidence leaves the branch open. Record meaningful challenge of the value, authority, lifecycle, numeric, and composition coverage families. Track high-priority low-cost next actions with `frontier`. Allocation failure preserves the candidate/frontier record and records the blocker.
-
-Run `controller assess` throughout the hunt. It automatically sweeps unresolved continuation contracts, prerequisite nodes, backtracking branches, actor programs, component compositions, solver witnesses, harness tasks, and protected evolution failures. `controller close` also refuses completion when bootstrap work is incomplete, coverage is missing, a candidate lacks expansion/refutation, impact branches remain open, a cheap high-value action remains, or distinct grounded components have not received an RSA generation. Close with an explicit matching class: clean, budget-exhausted, environment-blocked, or open-risk. Never label a blocked high-consequence sink clean.
-
-## Stop conditions
-
-Stop or pivot when runs cease to resolve material uncertainty, a prerequisite is impossible, fidelity cannot be established, or the campaign budget is reached. A validated intermediate capability is not a stop condition. Do not evade a budget by deleting records. Preserve refutations and near-misses.
-
-## Output contract
-
-Return campaign-relative artifact paths, record IDs, exact redacted command templates, evidence ceiling, observed limitations, and the next discriminating action. Never paste secrets, claim semantic proof from runtime gates, or describe an unreviewed lane handoff as a finding.
+Return record IDs, campaign-relative paths, redacted command templates, evidence ceiling, limitations, and next discriminating action. Never claim semantic proof from a runtime gate.

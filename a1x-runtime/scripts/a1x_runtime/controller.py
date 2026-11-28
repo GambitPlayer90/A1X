@@ -3,118 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .atomic import exclusive_lock, read_json, write_json_atomic, write_text_atomic
+from .atomic import exclusive_lock, read_json, write_json_atomic
 from .completion_sweep import sweep_research_state
-from .errors import A1XError, BudgetError, IntegrityError, ValidationError
+from .errors import IntegrityError, ValidationError
 from .evidence import has_demonstration_pair, has_refuting_evidence, has_strong_refuting_evidence, impact_control_pair, normalize_evidence_refs, verify_evidence_refs
 from .records import allocate_id, event, require_campaign, schema_for, utc_now
 from .scheduling import resource_snapshot
 
 
-BOOTSTRAP_AXES = [
-    "value-and-numerical: trace asset/claim conservation, denominators, rounding boundaries, and profitable cycles",
-    "authority-and-trust: challenge provenance, roles, governance cost, factories, upgrades, and configuration semantics",
-    "lifecycle-and-composition: search callbacks, partial completion, ordering, timing, and cross-contract state transitions",
-    "adversarial-refutation: attack the strongest apparent safety argument and seek a causal counterexample or clean refutation",
-]
-
-EXPANSION_AXES = [
-    "impact-extension: propagate the demonstrated primitive through every reachable value, upgrade, governance, settlement, and custody sink",
-    "alternate-consumer: find a different valuable consumer that trusts the same weak state, authority, denominator, or provenance",
-    "strongest-refutation: independently falsify reachability, actor capability, configuration fidelity, causality, or claimed consequence",
-    "causal-minimization: shrink the sequence, remove one prerequisite at a time, and identify the exact necessary transition",
-]
-
 COVERAGE_FAMILIES = {"value", "authority", "lifecycle", "numeric", "composition"}
 BLOCKER_KINDS = {"budget", "environment", "external-prerequisite", "tooling"}
 
 
-def _campaign_prompt(campaign: dict[str, Any]) -> str:
-    chain = campaign.get("chain", {})
-    return (
-        f"Conduct a blind adversarial first pass over target `{campaign['target']}`. "
-        "Start from valuable or irreversible consumers, derive protocol-specific obligations, map attacker control, "
-        "and construct abnormal but reachable state shapes. Do not settle on repository summaries. "
-        f"Deployment context: chain_id={chain.get('chain_id')}, block={chain.get('block_number')}. "
-        "Return one falsifiable mechanism or a precise evidence-backed refutation for the assigned axis."
-    )
-
-
-def ensure_bootstrap(root: Path, *, per_lane_timeout: int = 7200) -> dict[str, Any]:
-    """Create the mandatory blind population once. It is intentionally idempotent."""
-    from .scale import create_round
-
-    campaign = require_campaign(root)
-    for path in sorted((root / "scale").glob("ROUND-*/plan.json")):
-        plan = read_json(path)
-        if plan.get("purpose") == "bootstrap":
-            return plan
-    available = int(campaign.get("budgets", {}).get("max_scale_lanes", 0))
-    if available and available < len(BOOTSTRAP_AXES):
-        raise ValidationError(f"A1X requires at least {len(BOOTSTRAP_AXES)} scale lanes for the mandatory blind population")
-    prompt_path = root / "orchestration" / "bootstrap-prompt.md"
-    write_text_atomic(prompt_path, _campaign_prompt(campaign) + "\n")
-    return create_round(
-        root,
-        prompt_file=prompt_path,
-        axes=BOOTSTRAP_AXES,
-        hypothesis_id=None,
-        per_lane_timeout=per_lane_timeout,
-        purpose="bootstrap",
-    )
-
-
-def ensure_candidate_expansion(root: Path, candidate_id: str, *, per_lane_timeout: int = 7200) -> dict[str, Any]:
-    """Open mandatory extension/refutation lanes for every concrete candidate."""
-    from .scale import create_round
-
-    candidate_path = root / "candidates" / f"{candidate_id}.json"
-    if not candidate_path.exists():
-        raise ValidationError(f"unknown candidate: {candidate_id}")
-    candidate = read_json(candidate_path)
-    for path in sorted((root / "scale").glob("ROUND-*/plan.json")):
-        plan = read_json(path)
-        if plan.get("purpose") == "candidate-expansion" and plan.get("candidate_id") == candidate_id:
-            if candidate.get("expansion_round") != plan["id"] or candidate.get("expansion_status") != "allocated":
-                with exclusive_lock(root):
-                    current = read_json(candidate_path)
-                    current["expansion_round"] = plan["id"]
-                    current["expansion_status"] = "allocated"
-                    current["expansion_blocker"] = None
-                    current["expansion_blocker_kind"] = None
-                    write_json_atomic(candidate_path, current)
-            return plan
-    prompt = f"""A concrete candidate has been demonstrated. Treat it as a starting primitive, not a stopping condition.
-
-Candidate: {candidate_id}
-Root cause: {candidate.get('root_cause')}
-Reachability: {candidate.get('reachability')}
-Current consequence: {candidate.get('impact')}
-Consequence class: {candidate.get('consequence_class', 'unknown')}
-Terminal impact already demonstrated: {candidate.get('terminal_impact', False)}
-
-Follow the assigned axis. Preserve independent judgment. Any stronger consequence must be executed against a faithful local or pinned-fork state and compared with a causal control. A failed extension is useful only when the exact blocker is evidenced.
-"""
-    prompt_path = root / "orchestration" / f"{candidate_id}-expansion.md"
-    write_text_atomic(prompt_path, prompt)
-    plan = create_round(
-        root,
-        prompt_file=prompt_path,
-        axes=EXPANSION_AXES,
-        hypothesis_id=candidate.get("hypothesis_id"),
-        per_lane_timeout=per_lane_timeout,
-        purpose="candidate-expansion",
-        candidate_id=candidate_id,
-    )
-    with exclusive_lock(root):
-        current = read_json(candidate_path)
-        current["expansion_round"] = plan["id"]
-        current["expansion_status"] = "allocated"
-        current["expansion_blocker"] = None
-        current["expansion_blocker_kind"] = None
-        write_json_atomic(candidate_path, current)
-    event(root, "controller.candidate-expansion-created", candidate_id=candidate_id, round_id=plan["id"])
-    return plan
 
 
 def record_coverage(root: Path, *, family: str, status: str, evidence_refs: list[dict[str, Any]], limitations: str) -> dict[str, Any]:
@@ -178,55 +78,6 @@ def add_frontier(
     }
     write_json_atomic(root / "frontier" / f"{item_id}.json", record)
     event(root, "controller.frontier-opened", frontier_id=item_id, priority=priority, cost=cost)
-    if priority == "high" and cost in {"low", "medium"}:
-        from .scale import create_round
-
-        candidate = read_json(root / "candidates" / f"{candidate_id}.json") if candidate_id else None
-        prompt_path = root / "orchestration" / f"{item_id}-adaptive-scale.md"
-        write_text_atomic(
-            prompt_path,
-            f"""A grounded high-priority frontier has multiple material branches.
-
-Frontier: {statement}
-Grounding records: {grounding}
-Current next action: {next_action}
-
-Independently resolve the assigned branch with the cheapest discriminating experiment. Preserve exact state, actor, consumer, and blocker evidence.
-""",
-        )
-        try:
-            plan = create_round(
-                root,
-                prompt_file=prompt_path,
-                axes=[
-                    "direct-discriminator: execute the stated next action and measure the security property",
-                    "alternate-branch: test a different consumer, ordering, state shape, or consequence of the same grounded primitive",
-                    "strongest-refutation: independently attack reachability, causality, fidelity, or impact",
-                ],
-                hypothesis_id=candidate.get("hypothesis_id") if candidate else None,
-                per_lane_timeout=7200,
-                purpose="adaptive-frontier",
-                candidate_id=candidate_id,
-            )
-        except A1XError as exc:
-            record["scale_status"] = "blocked"
-            record["scale_blocker"] = f"{type(exc).__name__}: {exc}"
-            record["scale_blocker_kind"] = "budget" if isinstance(exc, BudgetError) else "tooling"
-            write_json_atomic(root / "frontier" / f"{item_id}.json", record)
-            event(root, "controller.frontier-allocation-blocked", frontier_id=item_id, error_type=type(exc).__name__)
-            return record
-        except Exception as exc:
-            record["scale_status"] = "blocked"
-            record["scale_blocker"] = f"unexpected {type(exc).__name__}: {exc}"
-            record["scale_blocker_kind"] = "tooling"
-            write_json_atomic(root / "frontier" / f"{item_id}.json", record)
-            event(root, "controller.frontier-allocation-error", frontier_id=item_id, error_type=type(exc).__name__)
-            raise
-        record["scale_round"] = plan["id"]
-        record["scale_status"] = "allocated"
-        record["scale_blocker"] = None
-        record["scale_blocker_kind"] = None
-        write_json_atomic(root / "frontier" / f"{item_id}.json", record)
     return record
 
 
@@ -287,6 +138,11 @@ def add_impact(
     if not candidate_path.exists():
         raise ValidationError(f"unknown candidate: {candidate_id}")
     candidate = read_json(candidate_path)
+    from .ledger import require_scope_impact
+
+    scope_id = str(candidate.get("scope_id") or "")
+    eligible_impact = str(candidate.get("eligible_impact") or "")
+    require_scope_impact(root, scope_id, eligible_impact)
     if status not in {"open", "demonstrated", "refuted", "blocked"}:
         raise ValidationError("impact status must be open, demonstrated, refuted, or blocked")
     if any(not value.strip() for value in (capability, sink, consequence, impact_property, next_action)):
@@ -336,6 +192,8 @@ def add_impact(
         "id": impact_id,
         "created_at": utc_now(),
         "candidate_id": candidate_id,
+        "scope_id": scope_id,
+        "eligible_impact": eligible_impact,
         "capability": capability,
         "sink": sink,
         "consequence": consequence,
@@ -353,6 +211,17 @@ def add_impact(
         "resolution_condition": resolution_condition,
     }
     write_json_atomic(root / "impact" / f"{impact_id}.json", record)
+    ledger_investigation_id = str(candidate.get("ledger_investigation_id") or "")
+    if ledger_investigation_id:
+        from .ledger import link_runtime_ref
+
+        link_runtime_ref(
+            root,
+            ledger_investigation_id,
+            f"impact/{impact_id}.json",
+            expected_kind="INV",
+            reason=f"linked downstream impact branch {impact_id}",
+        )
     event(root, "controller.impact-branch-recorded", candidate_id=candidate_id, impact_id=impact_id, status=status, promotion_status=promotion_status)
     return record
 
@@ -440,21 +309,6 @@ def _rounds(root: Path) -> list[dict[str, Any]]:
     return [read_json(path) for path in sorted((root / "scale").glob("ROUND-*/plan.json"))]
 
 
-def _eligible_handoffs(root: Path) -> int:
-    from .scale import _rsa_eligible
-
-    causal_keys: set[tuple[str, ...]] = set()
-    for path in (root / "scale").glob("ROUND-*/aggregate.json"):
-        aggregate = read_json(path)
-        for handoff in [*aggregate.get("handoffs", []), *aggregate.get("reserve_handoffs", [])]:
-            verification = handoff.get("runtime_verification", {})
-            key = verification.get("causal_key")
-            level = verification.get("evidence_level", "E0")
-            if _rsa_eligible(handoff) and isinstance(key, list) and key and level != "E0":
-                causal_keys.add(tuple(str(item) for item in key))
-    return len(causal_keys)
-
-
 def assess_completion(root: Path) -> dict[str, Any]:
     require_campaign(root)
     blockers: list[dict[str, str]] = []
@@ -466,65 +320,42 @@ def assess_completion(root: Path) -> dict[str, Any]:
         blockers.append({"gate": "RESEARCH-CONTINUITY", "reason": f"{item['source']}: {item['reason']} (next: {item['next_action']})"})
     for item in sweep.get("risks", []):
         open_risks.append({"kind": item["kind"], "record": item["source"], "reason": item["reason"]})
-    rounds = _rounds(root)
-    environment_rounds = [r for r in rounds if r.get("status") == "environment-blocked"]
-    for round_record in environment_rounds:
-        open_risks.append(
-            {
-                "kind": "environment",
-                "record": round_record["id"],
-                "reason": round_record.get("blocker") or "scale round blocked by the execution environment",
-            }
-        )
-    bootstrap = [r for r in rounds if r.get("purpose") == "bootstrap"]
-    if not bootstrap:
-        blockers.append({"gate": "TTS-BOOTSTRAP", "reason": "mandatory independent blind population was not created"})
-    elif any(r.get("status") == "environment-blocked" for r in bootstrap):
-        pass
-    elif not any(r.get("status") == "completed" and int(r.get("completed_lanes", 0)) == len(r.get("lanes", [])) == len(BOOTSTRAP_AXES) for r in bootstrap):
-        blockers.append({"gate": "TTS-BOOTSTRAP", "reason": "all four independent bootstrap lanes must complete"})
-    elif not any((root / "scale" / r["id"] / "aggregate.json").exists() for r in bootstrap):
-        blockers.append({"gate": "TTS-AGGREGATE", "reason": "bootstrap evidence has not been aggregated"})
-    else:
-        completed_bootstrap = next(
-            r
-            for r in bootstrap
-            if r.get("status") == "completed"
-            and int(r.get("completed_lanes", 0)) == len(r.get("lanes", [])) == len(BOOTSTRAP_AXES)
-            and (root / "scale" / r["id"] / "aggregate.json").exists()
-        )
-        aggregate = read_json(root / "scale" / completed_bootstrap["id"] / "aggregate.json")
-        handoffs = aggregate.get("handoffs", [])
-        substantive = [
-            handoff
-            for handoff in handoffs
-            if handoff.get("runtime_verification", {}).get("evidence_level") != "E0"
-            and handoff.get("runtime_verification", {}).get("artifact_bound") is True
-            and handoff.get("runtime_verification", {}).get("evidence_artifact_sha256")
-            and handoff.get("tested_obligation")
-            and handoff.get("discriminator")
-        ]
-        if aggregate.get("invalid_lanes") or len(handoffs) != len(BOOTSTRAP_AXES) or len(substantive) != len(BOOTSTRAP_AXES):
-            blockers.append(
-                {
-                    "gate": "TTS-HANDOFF",
-                    "reason": "all bootstrap lanes require artifact-anchored obligation, discriminator, and causal identity handoffs",
-                }
-            )
+    from .ledger import load_ledger, verify_ledger
 
-    incomplete_adaptive = [
-        r["id"]
-        for r in rounds
-        if r.get("purpose") == "adaptive-frontier"
-        and r.get("status") != "environment-blocked"
-        and (
-            r.get("status") != "completed"
-            or int(r.get("completed_lanes", 0)) != len(r.get("lanes", []))
-            or not (root / "scale" / r["id"] / "aggregate.json").exists()
-        )
+    try:
+        verify_ledger(root)
+        ledger = load_ledger(root)
+    except (IntegrityError, ValidationError) as exc:
+        ledger = {"records": {}}
+        blockers.append({"gate": "LEDGER-INTEGRITY", "reason": str(exc)})
+    ledger_records = list(ledger.get("records", {}).values())
+    scopes = [item for item in ledger_records if item.get("kind") == "SCOPE" and item.get("status") == "active"]
+    if not scopes:
+        blockers.append({"gate": "PROGRAM-SCOPE", "reason": "no active program scope and impact record exists"})
+    elif not any(isinstance(item.get("data", {}).get("impacts"), list) and item["data"]["impacts"] for item in scopes):
+        blockers.append({"gate": "PROGRAM-IMPACTS", "reason": "program scope does not enumerate the exact eligible impact classes"})
+    eligible_scope_impacts = {
+        (str(item["id"]), str(impact))
+        for item in scopes
+        for impact in item.get("data", {}).get("impacts", [])
+    }
+    open_ledger = [
+        item["id"] for item in ledger_records
+        if item.get("kind") in {"INV", "TASK", "EXP"}
+        and item.get("status") in {"open", "active"}
+        and item.get("priority") in {"high", "critical"}
+        and item.get("data", {}).get("cost", "low") in {"low", "medium"}
     ]
-    if incomplete_adaptive:
-        blockers.append({"gate": "TTS-ADAPTIVE", "reason": "grounded adaptive scale rounds remain incomplete: " + ", ".join(incomplete_adaptive)})
+    if open_ledger:
+        blockers.append({"gate": "MARGINAL-GAIN", "reason": "high-value bounded ledger work remains open: " + ", ".join(open_ledger)})
+    for item in ledger_records:
+        if item.get("status") == "blocked" and item.get("priority") in {"high", "critical"}:
+            open_risks.append({"kind": "external-prerequisite", "record": item["id"], "reason": item.get("next_action") or item["statement"]})
+
+    for path in sorted((root / "forks").glob("FORK-*.json")):
+        fork = read_json(path)
+        if fork.get("status") == "running":
+            blockers.append({"gate": "PROCESS-CLEANUP", "reason": f"session-owned Anvil fork is still running: {fork.get('id')} (pid {fork.get('supervisor_pid')})"})
 
     missing_coverage = [family for family in sorted(COVERAGE_FAMILIES) if not (root / "orchestration" / f"coverage-{family}.json").exists()]
     if missing_coverage:
@@ -542,14 +373,6 @@ def assess_completion(root: Path) -> dict[str, Any]:
         evidence_errors.extend(verify_evidence_refs(root, item.get("evidence_refs", [])))
         if evidence_errors:
             blockers.append({"gate": "FRONTIER-EVIDENCE", "reason": f"{item['id']} evidence invalid: {'; '.join(evidence_errors)}"})
-        if item.get("scale_status") == "blocked":
-            open_risks.append(
-                {
-                    "kind": item.get("scale_blocker_kind") or "tooling",
-                    "record": item["id"],
-                    "reason": f"scaling allocation blocked: {item.get('scale_blocker')}",
-                }
-            )
         if item.get("status") == "open" and item.get("priority") == "high" and item.get("cost") == "low":
             open_frontier.append(item["id"])
         if item.get("status") == "blocked" and item.get("priority") == "high":
@@ -567,6 +390,15 @@ def assess_completion(root: Path) -> dict[str, Any]:
     candidates = [read_json(path) for path in sorted((root / "candidates").glob("CAND-*.json"))]
     for candidate in candidates:
         candidate_id = candidate["id"]
+        candidate_scope_impact = (
+            str(candidate.get("scope_id") or ""),
+            str(candidate.get("eligible_impact") or ""),
+        )
+        if candidate_scope_impact not in eligible_scope_impacts:
+            blockers.append({
+                "gate": "PROGRAM-IMPACT-MAPPING",
+                "reason": f"{candidate_id} does not reference one exact eligible impact under an active SCOPE record",
+            })
         reviews = [
             read_json(root / "reviews" / f"{review_id}.json")
             for review_id in candidate.get("reviews", [])
@@ -595,25 +427,21 @@ def assess_completion(root: Path) -> dict[str, Any]:
             independently_rejected = True
         if candidate.get("status") != "validated" and not independently_rejected:
             blockers.append({"gate": "CANDIDATE-VALIDATION", "reason": f"{candidate_id} remains unvalidated or unrefuted"})
-        if candidate.get("expansion_status") == "blocked":
-            open_risks.append(
-                {
-                    "kind": candidate.get("expansion_blocker_kind") or "tooling",
-                    "record": candidate_id,
-                    "reason": f"expansion allocation blocked: {candidate.get('expansion_blocker')}",
-                }
-            )
-        expansion = [r for r in rounds if r.get("purpose") == "candidate-expansion" and r.get("candidate_id") == candidate_id]
-        completed_expansion = [
-            r
-            for r in expansion
-            if r.get("status") == "completed"
-            and int(r.get("completed_lanes", 0)) == len(r.get("lanes", [])) == len(EXPANSION_AXES)
-            and (root / "scale" / r["id"] / "aggregate.json").exists()
-        ]
-        environment_blocked_expansion = any(r.get("status") == "environment-blocked" for r in expansion)
-        if not completed_expansion and candidate.get("expansion_status") != "blocked" and not environment_blocked_expansion:
-            blockers.append({"gate": "IMPACT-EXTENSION", "reason": f"{candidate_id} lacks completed impact, alternate-consumer, refutation, and minimization lanes"})
+        elif candidate.get("status") == "validated" and not independently_rejected:
+            try:
+                from .candidates import check_gates
+
+                current_gates = check_gates(root, candidate_id)
+                if current_gates.get("mechanical_evidence_ceiling") != "E6":
+                    blockers.append({
+                        "gate": "CANDIDATE-REVALIDATION",
+                        "reason": f"{candidate_id} no longer passes its current sealed E0-E6 evidence chain",
+                    })
+            except (IntegrityError, ValidationError, OSError, ValueError) as exc:
+                blockers.append({
+                    "gate": "CANDIDATE-REVALIDATION",
+                    "reason": f"{candidate_id} evidence could not be revalidated: {exc}",
+                })
         candidate_impacts = [i for i in impacts if i.get("candidate_id") == candidate_id]
         if independently_rejected:
             continue
@@ -625,6 +453,14 @@ def assess_completion(root: Path) -> dict[str, Any]:
         if open_impacts:
             blockers.append({"gate": "IMPACT-GRAPH", "reason": f"{candidate_id} has unresolved impact branches: {', '.join(open_impacts)}"})
         for impact in candidate_impacts:
+            if (
+                str(impact.get("scope_id") or ""),
+                str(impact.get("eligible_impact") or ""),
+            ) != candidate_scope_impact:
+                blockers.append({
+                    "gate": "PROGRAM-IMPACT-MAPPING",
+                    "reason": f"{impact['id']} is not bound to {candidate_id}'s exact eligible impact",
+                })
             evidence_errors = verify_evidence_refs(root, impact.get("evidence_refs", []))
             if evidence_errors:
                 blockers.append({"gate": "IMPACT-EVIDENCE", "reason": f"{impact['id']} evidence invalid: {'; '.join(evidence_errors)}"})
@@ -667,11 +503,6 @@ def assess_completion(root: Path) -> dict[str, Any]:
         if candidate_impacts and not any(i.get("status") in {"demonstrated", "refuted", "blocked"} for i in candidate_impacts):
             blockers.append({"gate": "TERMINAL-CONSEQUENCE", "reason": f"{candidate_id} consequence was not propagated, refuted, or bounded with evidence"})
 
-    eligible = _eligible_handoffs(root)
-    recombination = [r for r in rounds if r.get("purpose") == "recombination"]
-    if eligible >= 2 and not any(r.get("status") == "completed" and int(r.get("completed_lanes", 0)) == len(r.get("lanes", [])) for r in recombination) and not any(r.get("status") == "environment-blocked" for r in recombination):
-        blockers.append({"gate": "RSA", "reason": "multiple grounded components exist but no recombination generation completed"})
-
     kinds = {risk["kind"] for risk in open_risks}
     if blockers:
         disposition = "INCOMPLETE"
@@ -693,10 +524,10 @@ def assess_completion(root: Path) -> dict[str, Any]:
         "blockers": blockers,
         "open_risks": open_risks,
         "summary": {
-            "rounds": len(rounds),
+            "legacy_rounds_preserved": len(_rounds(root)),
             "candidates": len(candidates),
             "impact_branches": len(impacts),
-            "eligible_handoffs": eligible,
+            "ledger_records": len(ledger_records),
             "automatically_registered_open_research": len(sweep.get("open", [])),
             "automatically_registered_risks": len(sweep.get("risks", [])),
         },

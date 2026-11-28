@@ -1,250 +1,247 @@
 <h1 align="center">A1X</h1>
 
 <p align="center">
-  <strong>Execution-guided smart-contract vulnerability research for Codex</strong>
+  <strong>Single-session, execution-guided smart-contract vulnerability research for Codex CLI</strong>
 </p>
 
 <p align="center">
-  Pinned-fork execution · Test-time scaling · Recursive self-aggregation · Replayable evidence
+  Scope-bound · Deployed-state aware · Composition-first · Replayable evidence
 </p>
 
 <p align="center">
+  <a href="#why-a1x">Why A1X</a> ·
+  <a href="#end-to-end-workflow">Workflow</a> ·
   <a href="#installation">Install</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="#how-a1x-works">Workflow</a> ·
-  <a href="#test-time-scaling-and-rsa">Scaling</a> ·
-  <a href="#skill-map">Skills</a> ·
-  <a href="#evidence-model">Evidence</a>
+  <a href="#durable-research-state">Ledger</a> ·
+  <a href="#evidence-and-promotion">Evidence</a>
 </p>
 
-![A1X execution-guided vulnerability research workflow: target boundary, blind research lanes, witness construction, test-time scaling, validation, runtime evidence, and local-fork safety boundaries.](docs/images/test-time-scaling-rsa.png)
+![A1X V5 single-session vulnerability research workflow: authorized scope and deployment, recon and obligations, reachable experiments, selective synthesis, validation and impact accounting, all supported by an atomic research ledger and local-only execution.](docs/images/a1x-v5-single-session.png)
 
 <p align="center">
-  <sub>A1X turns protocol hypotheses into replayable evidence while preserving independent exploration and strict local-fork boundaries.</sub>
+  <sub>One Codex chat. Visible built-in subagents. Pinned-fork execution. Durable evidence.</sub>
 </p>
 
-A1X is a Solidity/EVM investigation framework for Codex. It combines protocol reasoning with deterministic execution so that an investigation advances through observed state transitions rather than prose alone.
+A1X is an authorized Solidity/EVM bug-bounty and audit workflow for investigations that do not fit inside one function or one transaction. It works backward from the program's exact eligible impacts, reconstructs the deployed system, derives protocol-specific obligations, builds attacker-reachable histories, and tests them with source-faithful execution.
 
-The framework maps source and deployed state, derives security obligations, constructs attacker-reachable witnesses, runs targeted experiments, and preserves the resulting plans, receipts, traces, prerequisites, and replay records in an event-sourced campaign runtime.
-
-The runtime version in this repository is `4.4.0`. Version 4.4 adds executable parent-to-child continuity, separate witness and reachability closure, transaction checkpoints and within-transaction waypoints, prerequisite graphs with controlled backtracking, fair attempt-aware depth allocation, sequential/nested/temporal RSA composition, multi-actor programs, deterministic trace and fork-surface facts, broadened security oracles, harness-surface telemetry, exact integer/Z3 jobs, and automatic completion-state sweeping. Advancement is tied to observed runs and clean replay; operational failures remain separate from semantic stagnation.
+The current runtime is **5.0.0**. V5 replaces A1X's external lane/population controller with a persistent primary Codex session, selective visible subagents, deterministic local helpers, and an atomic campaign ledger.
 
 > [!IMPORTANT]
-> A1X is for authorized research on local simulations and pinned local forks. It does not authorize live-chain transactions, modification of target source, disclosure of credentials, or submission to third parties.
+> A1X is for explicitly authorized research. Adversarial transactions run only in local simulations or pinned local forks. A1X does not authorize live-chain exploitation, target selection, disclosure, submission, or automated transactions against live assets.
 
 ## Why A1X
 
-Smart-contract failures rarely live in one isolated function. They emerge when a producer creates state that a valuable consumer trusts too strongly—across actors, callbacks, accounting boundaries, lifecycle phases, or transactions.
+Difficult smart-contract failures often emerge from interactions among deployed configuration, internal accounting, exact integer arithmetic, callbacks, lifecycle transitions, external protocols, and multiple transactions. Static analysis and formal verification are valuable, but neither automatically proves that the modeled property, environment, or composition boundary matches the deployed economic system.
 
-A1X is designed to investigate those chains without collapsing into either a scanner checklist or an unbounded agent loop:
+A1X therefore treats tools as evidence producers inside an investigation loop:
 
-- **Execution-guided:** hypotheses are tested against source-faithful simulations or pinned fork state.
-- **Obligation-driven:** each lead starts from a property that must hold for a defined actor, boundary, unit, and exception set.
-- **Witness-preserving:** partial exploits, exact blockers, failed experiments, and refutations remain available to later generations.
-- **Evidence-calibrated:** a positive trace is not automatically a vulnerability; causality, fidelity, replay, and impact remain separate gates.
-- **Budgeted:** campaign limits govern recorded runs, scale lanes, parallel workers, timeouts, and completion.
+- begin with exact program scope, attacker capabilities, and payable impacts;
+- establish source, bytecode, proxy, module, library, and configuration identity;
+- reason in terms of assets, liabilities, internal claims, authority, writers, guards, representations, and valuable consumers;
+- compose the shortest attacker-valid sequence that reaches a falsifiable security property;
+- route the blocker to concrete execution, stateful fuzzing, exact arithmetic, or bounded solving;
+- preserve useful failures and partial witnesses instead of restarting from prose;
+- require causal controls, clean replay, net impact accounting, and exact scope binding before promotion.
 
-**Runtime:** 4.4.0 · **Primary agent:** Codex · **Execution boundary:** local simulations and pinned forks · **Project status:** research prototype
+The workflow is designed to support hard accounting, rounding, provenance, settlement, composability, transient-state, cross-contract, lifecycle, and cross-domain investigations. It does **not** hard-code historical incidents as patterns to match, and it does not guarantee that every vulnerability will be found.
 
-## How A1X works
+## What changed in V5
 
-| Stage | Purpose | Durable output |
-| --- | --- | --- |
-| **1. Target and boundary** | Record the source snapshot, deployment, authorized methods, chain, pinned block, and budget. | Target identity and campaign boundary |
-| **2. Four blind lanes** | Investigate value/numerical behavior, authority/trust, lifecycle/composition, and adversarial refutation independently. | Diverse grounded hypotheses |
-| **3. Obligation to witness** | Map state, derive a falsifiable mechanism, compose the shortest reachable sequence, and run a discriminator. | Plans, receipts, traces, blockers, and observations |
-| **4. Test-time scaling** | Continue partial witnesses, compose compatible leads, and inject fresh independent search. | Lineages, prerequisites, handoffs, and reserves |
-| **5. Validate and extend** | Add negative controls, replay cleanly, review independently, and explore downstream impact. | Evidence bundle, replay record, and impact envelope |
+| Preserved and strengthened | Removed from the active workflow |
+|---|---|
+| Deployment and value-flow reconstruction | External `codex exec`/fork/resume worker processes |
+| Protocol-specific obligations | Blind bootstrap lanes and fixed worker populations |
+| Unprivileged attacker reachability | Mandatory generations and predetermined allocation ratios |
+| Pinned Anvil execution and adversarial sequencing | Lane handoffs as the primary research representation |
+| Stateful invariant fuzzing and exact numerical search | Automatic RSA schedules disconnected from evidence |
+| Partial witnesses, blockers, refutations, controls, and replay | Hidden model subprocesses and background model orchestration |
+| Selective attack composition and investigation synthesis | Phase skills that fragmented one investigation across contexts |
 
-The coordinator revisits earlier stages whenever execution reveals an unknown writer, actor, dependency, configuration, or state transition.
+The useful research principle remains: independent attempts can contribute executable steps, numerical constraints, reachable preparation, or negative evidence to a better next experiment. Aggregation occurs only when grounded information changes what can be tested next. There are no mandatory worker counts or generation schedules.
 
-### Two cooperating layers
+## End-to-end workflow
 
-| Layer | Responsibility |
-| --- | --- |
-| **Investigation skills** | Protocol reconstruction, obligation derivation, actor modeling, attack composition, experiment design, fuzzing, solving, and validation |
-| **Campaign runtime** | Campaign identity, budgets, sealed execution, observations, artifacts, lineages, prerequisites, replay, review, and completion state |
+| Stage | Primary question | Durable result |
+|---|---|---|
+| **1. Scope and deployment** | What is authorized, deployed, attacker-reachable, excluded, and paid by this program? | Exact scope strings, attacker model, deployment identity, pinned block and hash |
+| **2. Recon and obligations** | What must remain true across assets, claims, authority, lifecycle, and consumers? | Complete entry-point coverage, system map, independent properties, falsifiable mechanisms |
+| **3. Reachable experiments** | What is the shortest faithful history that distinguishes the mechanism from its strongest alternative? | Forge/Anvil runs, traces, state deltas, fuzz counterexamples, numerical bounds, scoped refutations |
+| **4. Selective synthesis** | Can compatible transitions or complementary findings unlock a materially better test? | Revised executable attempt and next discriminator—not a vote or summary |
+| **5. Validate and account** | Is the behavior reachable, causal, replayable, economically real, and exactly in scope? | Clean replay, controls, net impact, harmed party, limitations, independent challenge |
 
-Codex supplies target-specific reasoning and experiments. Foundry, RPC observations, fuzzers, and solvers supply evidence. The runtime preserves and checks artifact relationships; it does not replace human judgment about protocol semantics.
+Execution can send the investigation back to recon whenever it reveals an unknown writer, consumer, identity, configuration, callback, or dependency.
 
-## Test-time scaling and RSA
+### Impact-backward search
 
-A1X allocates additional inference and execution effort only while new work can resolve material uncertainty or reach a security-relevant state.
+A1X does not treat a generic vulnerability category as the objective. It records the bug-bounty program's exact eligible impact strings, identifies the valuable consumers capable of realizing those impacts, and searches backward through guards and representations to attacker-controlled or attacker-obtainable writers.
 
-| Lane | Input | Assignment |
-| --- | --- | --- |
-| **K=1W · Witness closure** | One source-faithful partial witness | Replay the parent, preserve its assertions, and execute the first open witness edge in a distinct replayed run |
-| **K=1R · Reachability closure** | One reproducible conditional mechanism | Replace one artificial predicate through an evidence-backed non-privileged writer in the required direction |
-| **K=2 · RSA composition** | Two grounded parent handoffs | Test sequential, nested callback, or temporal compatibility through a new execution and clean replay |
-| **Fresh · Independent search** | No parent conclusions | Explore a different mechanism or state shape with a cheap discriminator |
+Early grounded discoveries can receive bounded research time before their final consequence is known. Candidate promotion, however, requires an exact `(scope ID, eligible impact string)` binding.
 
-**K is the number of parent handoffs supplied to a child.** K=1W protects source-faithful sequential depth. K=1R protects bounded research into conditionally demonstrated mechanisms without promoting them as reachable vulnerabilities. K=2 provides executable pairwise recursive self-aggregation. Fresh lanes preserve breadth.
+### Reachable attack composition
 
-A composition remains a hypothesis until execution supports it. Incompatible parents stay separate, and demonstrated candidates still pass validation and impact-extension gates.
+Experiments can model multiple actors, attacker-deployed components, flash liquidity, callbacks, reentrancy boundaries, honest interleavings, multi-transaction ordering, time or epoch movement, settlement, withdrawal, residual obligations, and acquired authority. Cheatcodes may create ordinary test setup; they may not manufacture the exploit prerequisite or attacker capability being claimed.
 
-For economic paths, a witness may progress through:
+### Stateful and numerical search
 
-> prepare → trigger → persist → settle → realize → impact
+Sequence-heavy state machines route to stateful invariant fuzzing with realistic handlers and independent oracles. Arithmetic blockers route to exact integer models, boundary search, or bounded symbolic solving. A minimized counterexample becomes a deterministic Forge/Anvil regression with neighboring positive and negative controls.
 
-Authorization, governance, upgrade, settlement, and liveness mechanisms use their own terminal semantics.
+### Selective subagents
+
+The primary investigator stays in one Codex CLI chat. Built-in subagents are visible through `/subagents` and are invoked only when independent work can change a decision—for example:
+
+- deployment or configuration verification;
+- an unbiased alternative mechanism;
+- one blocker-specific numerical or reachability question;
+- alternate-consumer tracing;
+- harness, accounting, replay, or impact challenge.
+
+A rationale-withheld challenger reviews every candidate before the highest evidence level. Scripts may prepare ledger tasks and sealed review packets, but scripts never launch agents. No unavailable subagent is replaced with a hidden model subprocess.
+
+## Tool routing
+
+A1X selects tools by the unresolved question instead of running every backend:
+
+| Question | Typical evidence producer |
+|---|---|
+| Complete source and entry-point coverage | Bundled manifest/coverage gates, compiler AST, Slither, Graphify |
+| Deployed code and configuration identity | Cast/RPC, verified source, bytecode and proxy/module resolution |
+| Concrete behavior and traces | Forge tests and a disclosed pinned Anvil fork |
+| Sequence-dependent state-machine failures | Forge invariant tests, Echidna, Medusa, Wake, or ItyFuzz when target-compatible |
+| Exact rounding, amount, ordering, or boundary constraints | Exact integer models, bounded Python search, Z3/Halmos when useful |
+| Candidate causality and consequence | Independent oracle, negative control, clean replay, trace facts, net impact accounting |
+
+Scanner output, a symbolic witness, an exit code, or a generated PoC is a lead—not a security conclusion. Optional tools are capability- and target-gated; a missing specialist does not block unrelated work.
+
+## Durable research state
+
+Each campaign stores a compact authoritative ledger in `v5/ledger.json`, with deterministic `ledger.tsv` and `brief.md` views for recovery and querying.
+
+| Record | Purpose |
+|---|---|
+| `SCOPE` | Authorized target, attacker model, exclusions, and exact eligible impacts |
+| `OBL` | Independently justified protocol property and oracle |
+| `INV` | Stable investigation identity from lead through validated/refuted state |
+| `EXP` | One falsifiable experiment attached to an investigation |
+| `FACT` | Grounded source, configuration, execution, numerical, or negative evidence |
+| `TASK` | One bounded question for the primary investigator or visible subagent |
+| `SYN` | A revised testable attempt plus its next discriminator |
+
+Large logs, traces, receipts, replays, and immutable artifacts remain outside the ledger and are referenced by ID, path, and hash. Revision-checked updates prevent stale writers from silently overwriting current state.
+
+The typed evidence chain is:
+
+```text
+SCOPE → OBL → INV → EXP → RUN → observation/replay → candidate → exact eligible impact
+```
+
+An investigation keeps the same `INV` identity as it moves from lead to hypothesis, candidate, validated, or refuted. V4 campaigns migrate additively into a V5 sidecar; legacy evidence is not rewritten or resumed as external lanes.
+
+## Evidence and promotion
+
+Evidence levels are mechanical ceilings over linked records, not semantic truth:
+
+| Level | Required relationship |
+|---|---|
+| **E0–E2** | Recorded mechanism, code grounding, and justified reachability |
+| **E3** | Concrete execution reaches the predicted suspicious state |
+| **E4** | Independent property violation plus causal control |
+| **E5** | Deployment, configuration, actor, and economic fidelity |
+| **E6** | Clean replay plus sealed, rationale-withheld review by a distinct visible built-in subagent |
+
+Execution alone does not validate the security property, attacker model, accounting interpretation, or impact. A clean campaign is a bounded coverage statement, never proof of safety.
 
 ## Installation
 
 ### Requirements
 
-- Linux
-- Python 3.11 or newer
-- Git
-- An authenticated, compatible Codex CLI
-- Foundry (<code>forge</code>, <code>cast</code>, and <code>anvil</code>) for fork investigations
-- A historical-state-capable RPC endpoint for the selected chain and block
+- Linux and Python 3.11+
+- Git and `rsync`
+- Codex CLI with built-in subagents
+- Foundry (`forge`, `cast`, and `anvil`)
+- a historical-state-capable RPC endpoint for deployed-state work
 
-Optional specialists such as Wake, Echidna, Medusa, ItyFuzz, Halmos/Z3, Slither, and Aderyn are capability-gated. A missing optional backend does not disable unrelated work.
+Optional target-gated specialists include Slither, Graphify, Wake, Echidna, Medusa, ItyFuzz, Halmos/Z3, and Aderyn.
 
-### 1. Clone the repository
+### Clone over SSH
 
-Using HTTPS:
-
-~~~bash
-git clone https://github.com/GambitPlayer90/A1X.git
-cd A1X
-~~~
-
-Using SSH:
-
-~~~bash
+```bash
 git clone git@github.com:GambitPlayer90/A1X.git
 cd A1X
-~~~
+```
 
-### 2. Install the skills
+### Install the V5 skill surface
 
-The installer below refuses to overwrite an existing A1X installation.
+V5 installs only the canonical skill, its compatibility alias, and the deterministic runtime. Quarantined V4 worker code remains in the repository for regression history and is excluded from installation.
 
-~~~bash
+```bash
 mkdir -p "$HOME/.agents/skills"
+rsync -a --delete --delete-excluded --exclude=tests/ --exclude=__pycache__/ --exclude='*.pyc' \
+  a1x/ "$HOME/.agents/skills/a1x/"
+rsync -a --delete a1x-hunt/ "$HOME/.agents/skills/a1x-hunt/"
+rsync -a --delete --delete-excluded --exclude-from=a1x-runtime/install-exclude.txt \
+  a1x-runtime/ "$HOME/.agents/skills/a1x-runtime/"
+```
 
-for skill in a1x a1x-*; do
-  if [ -e "$HOME/.agents/skills/$skill" ]; then
-    echo "Existing skill: $skill. Back it up before installing." >&2
-    exit 1
-  fi
-done
+If upgrading from V4, remove or archive the old discoverable phase-skill entrypoints (`a1x-recon`, `a1x-obligations`, `a1x-compose`, `a1x-execute`, `a1x-fuzz`, `a1x-solve`, `a1x-scale`, and `a1x-validate`) so Codex cannot route into the retired workflow.
 
-for skill in a1x a1x-*; do
-  cp -a "$skill" "$HOME/.agents/skills/$skill"
-done
-~~~
+Verify the runtime:
 
-### 3. Verify the runtime
-
-~~~bash
+```bash
 A1X_CLI="$HOME/.agents/skills/a1x-runtime/scripts/a1x"
+"$A1X_CLI" --version
+"$A1X_CLI" doctor
+```
 
-python3 "$A1X_CLI" --version
-python3 "$A1X_CLI" doctor
-~~~
-
-Optional specialist tools are capability-gated per target; a machine-level installation is never treated as target readiness. The bundled exact-integer search needs only Python. The Z3 adapter uses `A1X_Z3_PYTHON` when set, or the isolated A1X environment under `~/.local/share/a1x/z3-4.15.4.0` when present.
-
-If an archive discarded executable permissions, restore them on <code>a1x</code>, <code>a1x-lane-fork</code>, and <code>a1x-lane-fork-mcp</code> in the installed runtime's <code>scripts/</code> directory.
+Restart Codex CLI after installing so the skill catalog reloads.
 
 ## Quick start
 
-Invoke <code>$a1x-hunt</code>—or the compatibility entry point <code>$a1x</code>—with a concrete authorized target:
+Open one fresh Codex CLI chat and invoke `$a1x` with a concrete authorized target:
 
-~~~text
-$a1x-hunt
+```text
+$a1x
 
-Investigate the authorized Solidity target at /absolute/path/to/protocol.
-Deployment: <address>, chain <chain-id>, pinned block <block-number>.
-The host RPC is configured as MAINNET_RPC_URL; keep its value out of artifacts.
+Investigate the authorized Immunefi target at /absolute/path/to/protocol.
+Program scope: <URL or supplied scope document>.
+Deployment: <addresses>, chain <chain-id>, pinned block <number> with hash <0x...>.
+RPC variable name: MAINNET_RPC_URL. Never print its value.
 
-Use local simulations and pinned local forks. Preserve target sources.
-Create the campaign outside the target compilation tree.
-Budget: 200 recorded runs, 32 scale lanes, at most 4 parallel workers.
+Use one Codex chat, visible built-in subagents only when justified,
+local simulations and a pinned Anvil fork, stateful invariant fuzzing,
+exact arithmetic search, clean replay, and exact in-scope impact validation.
+```
 
-Return replayable candidates, causal controls, measured consequences,
-refutations, and exact unresolved prerequisites.
-~~~
+The primary investigator creates or resumes an `audit-work/<campaign>/` directory outside the target build tree. Campaign initialization records state only: it does not start Anvil, a worker, or a model process. Forks and fuzzers are started visibly when an experiment requires them and are stopped before closure.
 
-A1X discovers RPC and explorer **variable names** without printing their values. Never paste credentials into a prompt, campaign artifact, test log, commit, or report.
+Detailed runtime examples are in the [V5 command guide](a1x-runtime/references/command-guide.md).
 
-The coordinator creates a mandatory four-worldview blind bootstrap round before narrowing onto one theory. It then routes work to the appropriate reconstruction, obligation, composition, execution, fuzzing, solving, scaling, or validation skill.
-
-See the [full coordinator policy](a1x-hunt/SKILL.md) and [runtime command guide](a1x-runtime/references/command-guide.md) for explicit campaign operation.
-
-## Evidence model
-
-A1X records observations separately from interpretation. Its evidence levels are mechanical ceilings over linked records—not guarantees that an interpretation is correct.
-
-| Level | Meaning |
-| --- | --- |
-| **E0–E2** | Mechanism recorded, code-grounded, and justified as reachable |
-| **E3** | A concrete experiment reaches the predicted suspicious state |
-| **E4** | The property violation has a causal negative control |
-| **E5** | Implementation, configuration, actor, and economic fidelity are declared |
-| **E6** | Clean mechanical replay and a qualifying fresh-process review are linked |
-
-Artifact hashes do not prove protocol meaning. Replay does not prove the oracle. Review does not establish independent reproduction by itself.
-
-A campaign is not complete merely because it contains an E3–E6 candidate. The runtime hierarchy is:
-
-> mechanism found → candidate demonstrated → vulnerability validated → terminal impact demonstrated or bounded → maximum credible consequence explored → campaign closed
-
-## Skill map
+## Packages
 
 | Package | Role |
-| --- | --- |
-| [a1x](a1x/SKILL.md) | Compatibility entry point that routes complete investigations to A1X Hunt |
-| [a1x-hunt](a1x-hunt/SKILL.md) | End-to-end coordination, specialist routing, expansion, and completion |
-| [a1x-runtime](a1x-runtime/SKILL.md) | Event-sourced campaign state, CLI/MCP, evidence, forks, replay, and scheduling |
-| [a1x-recon](a1x-recon/SKILL.md) | Deployment, actor, asset-flow, dependency, and state-transition reconstruction |
-| [a1x-obligations](a1x-obligations/SKILL.md) | Security obligations, falsifiable hypotheses, and oracles |
-| [a1x-compose](a1x-compose/SKILL.md) | Reachable multi-call, multi-actor, callback, and multi-transaction sequences |
-| [a1x-execute](a1x-execute/SKILL.md) | Controlled experiments, observations, metrics, and causal controls |
-| [a1x-fuzz](a1x-fuzz/SKILL.md) | Focused stateful campaigns with realistic handlers and independent oracles |
-| [a1x-solve](a1x-solve/SKILL.md) | Bounded numeric, symbolic, timing, ordering, and boundary constraints |
-| [a1x-scale](a1x-scale/SKILL.md) | Blind populations, protected continuation, RSA, reserves, and progress |
-| [a1x-validate](a1x-validate/SKILL.md) | Reachability, fidelity, causality, impact, independent review, and replay |
+|---|---|
+| [`a1x`](a1x/SKILL.md) | Canonical end-to-end single-session hunt workflow |
+| [`a1x-hunt`](a1x-hunt/SKILL.md) | Small compatibility alias that forwards to `$a1x` |
+| [`a1x-runtime`](a1x-runtime/SKILL.md) | Deterministic ledger, fork, execution, evidence, replay, review-packet, and closure mechanics |
 
-## Safety boundaries
+Supporting guides live in [`a1x/references/`](a1x/references/) and runtime mechanics in [`a1x-runtime/references/`](a1x-runtime/references/).
 
-A1X's workflow requires:
+## Release validation
 
-- preserve target source;
-- execute adversarial behavior only in local simulations or pinned local forks;
-- separate setup authority from attacker authority;
-- keep RPC URLs and API keys out of prompts and artifacts;
-- verify deployed applicability at a recorded block;
-- distinguish harness repair from hypothesis progress;
-- treat scanner output and generated PoCs as leads, not conclusions;
-- never submit, disclose, or transact against live assets automatically.
+The V5 transformation was validated with:
+
+- 47 unit, regression, ledger, process-guard, and recon-helper checks;
+- 8 Foundry/Anvil integration checks;
+- installed-surface smoke tests and skill-package validation;
+- two independent fresh-context reviews.
+
+The runtime rejects known model executables and opaque inline interpreter programs at its sealed execution boundary. This is a guardrail, not an operating-system sandbox: reviewable deterministic scripts remain part of the trusted local research surface.
 
 ## Research status
 
-A1X implements a method for studying whether witness-preserving search improves vulnerability discovery at matched cost. This repository does **not** establish superiority over A1, a benchmark success rate, or a speedup over fuzzing or symbolic execution.
+A1X is a research workflow, not evidence that any particular orchestration strategy outperforms expert auditing, fuzzing, or formal verification at matched cost. Effectiveness should be evaluated on independently adjudicated targets using unique root causes, time and cost to valid witnesses, false positives, partial-to-complete conversion, and coverage limitations.
 
-Evaluation should hold the model, target information, tools, and budgets constant while measuring independently adjudicated target success, unique root causes, time and cost to a valid witness, partial-to-complete conversion, and false positives.
-
-## Further reading
-
-- [A1X coordinator policy](a1x-hunt/SKILL.md)
-- [Runtime command guide](a1x-runtime/references/command-guide.md)
-- [Population design](a1x-scale/references/population-design.md)
-- [Recursive aggregation](a1x-scale/references/recursive-aggregation.md)
-- [Scaling runtime](a1x-runtime/references/scaling-runtime.md)
-- [Evidence artifact contract](a1x-runtime/references/artifact-contract.md)
-- [Runtime architecture](a1x-runtime/references/v4-architecture.md)
-
-## Background and attribution
-
-A1X is a separate research implementation influenced by:
-
-- [A1: AI Agent Smart Contract Exploit Generation](https://arxiv.org/abs/2507.05558), Arthur Gervais and Liyi Zhou
-- [Recursive Self-Aggregation Unlocks Deep Thinking in Large Language Models](https://arxiv.org/abs/2509.26626), Siddarth Venkatraman et al.
-
-Protected continuation, the evidence/prerequisite representation, and the mixed exploration policy are mechanisms to evaluate. Effectiveness and novelty require controlled results and broader prior-art comparison.
+The design is influenced by work on AI-assisted exploit generation, long-horizon attempt reuse, and recursive improvement. V5 retains selective evidence-driven synthesis while removing mandatory population schedules and external model-process orchestration.
 
 ---
 
