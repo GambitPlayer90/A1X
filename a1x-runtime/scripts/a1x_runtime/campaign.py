@@ -33,7 +33,7 @@ COUNTERS = {
     "validated_root_causes": 0,
 }
 
-CURRENT_RUNTIME_VERSION = "5.0.0"
+CURRENT_RUNTIME_VERSION = "5.1.0"
 
 CAMPAIGN_DIRECTORIES = (
     "obligations",
@@ -425,7 +425,7 @@ def doctor() -> dict[str, Any]:
         "static_analysis": found["wake"]["available"] or found["slither"]["available"],
     }
     return {
-        "runtime_version": "5.0.0",
+        "runtime_version": CURRENT_RUNTIME_VERSION,
         "platform": os.uname().sysname,
         "tools": found,
         "core_ready": core_ready,

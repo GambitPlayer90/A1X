@@ -9,6 +9,7 @@ from pathlib import Path
 
 FILE_STATUSES = {"analyzed", "dependency-only", "inactive", "unreachable", "excluded"}
 ENTRY_DISPOSITIONS = {"analyzed", "not-applicable"}
+READ_DISPOSITIONS = {"analyzed", "not-security-relevant"}
 
 
 def _load(path: Path) -> dict:
@@ -35,6 +36,14 @@ def main() -> int:
 
     if scan.get("schema_version") != 1:
         errors.append("entry-point scan must use schema_version 1")
+    if scan.get("path_basis") != "root-relative":
+        errors.append("entry-point scan must use root-relative paths")
+    if scan.get("scope_mode") not in {"paths", "manifest"} or not _nonempty_list(scan.get("scope_inputs")):
+        errors.append("entry-point scan must preserve scope_mode and non-empty scope_inputs")
+    if not isinstance(scan.get("entry_points"), list) or not isinstance(scan.get("read_surfaces"), list):
+        errors.append("entry-point scan must include entry_points and read_surfaces arrays")
+    if scan.get("problems"):
+        errors.append("entry-point scan contains unreadable or skipped paths")
     if coverage.get("schema_version") != 1:
         errors.append("coverage map must use schema_version 1")
 
@@ -92,6 +101,39 @@ def main() -> int:
         if not _nonempty_list(row.get("evidence")):
             errors.append(f"{entry_id}: entry-point evidence is required")
 
+    expected_reader_list = [
+        str(row.get("id")) for row in scan.get("read_surfaces") or [] if isinstance(row, dict)
+    ]
+    expected_readers = set(expected_reader_list)
+    if len(expected_reader_list) != len(expected_readers) or "None" in expected_readers:
+        errors.append("read-surface scan contains duplicate or missing IDs")
+    reader_rows = coverage.get("read_surfaces")
+    if not isinstance(reader_rows, list):
+        errors.append("coverage map must contain a read_surfaces array")
+        reader_rows = []
+    actual_reader_list = [str(row.get("id")) for row in reader_rows if isinstance(row, dict)]
+    actual_readers = set(actual_reader_list)
+    if len(actual_reader_list) != len(actual_readers):
+        errors.append("coverage map contains duplicate read-surface rows")
+    if expected_readers != actual_readers:
+        errors.append(
+            f"read-surface coverage mismatch: missing={sorted(expected_readers-actual_readers)} "
+            f"extra={sorted(actual_readers-expected_readers)}"
+        )
+    for row in reader_rows:
+        if not isinstance(row, dict):
+            errors.append("read-surface coverage rows must be objects")
+            continue
+        reader_id = row.get("id")
+        if row.get("disposition") not in READ_DISPOSITIONS:
+            errors.append(f"{reader_id}: invalid read-surface disposition {row.get('disposition')!r}")
+        for field in ("consumer_role", "observation_timing"):
+            if not str(row.get(field) or "").strip():
+                errors.append(f"{reader_id}: {field} is required")
+        for field in ("dependencies", "external_consumers", "obligations", "evidence"):
+            if not _nonempty_list(row.get(field)):
+                errors.append(f"{reader_id}: non-empty {field} is required")
+
     if args.graph_summary and args.graph_summary.is_file():
         graph = _load(args.graph_summary)
         graph_files = [str(path) for path in graph.get("expected_solidity_files") or []]
@@ -137,7 +179,7 @@ def main() -> int:
         return 1
     print(
         f"coverage gate passed: {len(expected_files)} files, "
-        f"{len(expected_entries)} entry points"
+        f"{len(expected_entries)} entry points, {len(expected_readers)} read surfaces"
     )
     return 0
 

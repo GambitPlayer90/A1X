@@ -341,7 +341,7 @@ def assess_completion(root: Path) -> dict[str, Any]:
     }
     open_ledger = [
         item["id"] for item in ledger_records
-        if item.get("kind") in {"INV", "TASK", "EXP"}
+        if item.get("kind") in {"INV", "TASK", "EXP", "SYN"}
         and item.get("status") in {"open", "active"}
         and item.get("priority") in {"high", "critical"}
         and item.get("data", {}).get("cost", "low") in {"low", "medium"}
@@ -356,6 +356,13 @@ def assess_completion(root: Path) -> dict[str, Any]:
         fork = read_json(path)
         if fork.get("status") == "running":
             blockers.append({"gate": "PROCESS-CLEANUP", "reason": f"session-owned Anvil fork is still running: {fork.get('id')} (pid {fork.get('supervisor_pid')})"})
+
+    try:
+        from .recon import verify_coverage_gate
+
+        verify_coverage_gate(root)
+    except (IntegrityError, ValidationError, OSError, ValueError) as exc:
+        blockers.append({"gate": "RECON-COVERAGE", "reason": str(exc)})
 
     missing_coverage = [family for family in sorted(COVERAGE_FAMILIES) if not (root / "orchestration" / f"coverage-{family}.json").exists()]
     if missing_coverage:

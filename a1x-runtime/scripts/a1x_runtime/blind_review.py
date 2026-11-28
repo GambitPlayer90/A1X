@@ -4,8 +4,9 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from .atomic import read_json, seal, verify_seal, write_json_atomic
+from .atomic import digest_bytes, read_json, seal, verify_seal, write_json_atomic
 from .errors import IntegrityError, ValidationError
+from .replay import load_verified_replay
 from .records import allocate_id, event, require_v4_campaign, schema_for, utc_now
 
 
@@ -14,7 +15,13 @@ def prepare_blind_review(root: Path, candidate_id: str) -> dict[str, Any]:
     candidate = read_json(root / "candidates" / f"{candidate_id}.json")
     if not candidate.get("replay_id"):
         raise ValidationError("blind review requires a prepared replay")
-    replay = read_json(root / "replays" / f"{candidate['replay_id']}.json")
+    replay = load_verified_replay(
+        root,
+        str(candidate["replay_id"]),
+        expected_run_id=str(candidate.get("support_run") or ""),
+    )
+    if replay.get("passed") is not True:
+        raise ValidationError("blind review requires a passing replay of the exact candidate support run")
     review_id = allocate_id(root, "BLIND")
     directory = root / "reviews" / review_id
     directory.mkdir(parents=True)
@@ -159,25 +166,62 @@ def qualifies(root: Path, review_id: str, candidate_id: str) -> bool:
     path = root / "reviews" / review_id / "record.json"
     if not path.is_file():
         return False
-    record = read_json(path)
-    identity = record.get("reviewer_identity", {})
-    visible_task_bound = False
-    if record.get("visible_in_session") is True and record.get("ledger_task_id"):
-        try:
-            from .ledger import show_record
-
-            task = show_record(root, str(record["ledger_task_id"]))
-            visible_task_bound = bool(
-                task.get("kind") == "TASK"
-                and task.get("status") == "closed"
-                and task.get("owner") == f"subagent:{identity.get('thread')}"
-                and task.get("data", {}).get("review_id") == review_id
-                and task.get("data", {}).get("review_output_sha256") == record.get("output_sha256")
-                and task.get("data", {}).get("packet_sha256") == record.get("packet_sha256")
-                and task.get("data", {}).get("challenge_nonce") == record.get("challenge_nonce")
+    try:
+        directory = path.parent
+        verify_seal(directory / "packet.json", directory / "packet.sha256")
+        verify_seal(directory / "review-output.json", directory / "review-output.sha256")
+        record = read_json(path)
+        packet = read_json(directory / "packet.json")
+        output = read_json(directory / "review-output.json")
+        candidate = read_json(root / "candidates" / f"{candidate_id}.json")
+        replay = load_verified_replay(
+            root,
+            str(candidate.get("replay_id") or ""),
+            expected_run_id=str(candidate.get("support_run") or ""),
+        )
+        identity = record.get("reviewer_identity", {})
+        thread = str(identity.get("thread") or "")
+        packet_sha = digest_bytes((directory / "packet.json").read_bytes())
+        output_sha = digest_bytes((directory / "review-output.json").read_bytes())
+        if not (
+            record.get("candidate_id") == candidate_id
+            and packet.get("review_id") == review_id
+            and packet.get("candidate_id") == candidate_id
+            and record.get("packet_sha256") == packet_sha
+            and record.get("output_sha256") == output_sha
+            and packet.get("support_run") == candidate.get("support_run") == replay.get("run_id")
+            and packet.get("control_run") == candidate.get("control_run")
+            and packet.get("replay") == replay
+            and output.get("review_id") == review_id
+            and output.get("candidate_id") == candidate_id
+            and output.get("packet_sha256") == packet_sha
+            and output.get("challenge_nonce") == record.get("challenge_nonce") == packet.get("challenge_nonce")
+            and output.get("subagent_thread") == thread
+            and output.get("verdict") == record.get("verdict")
+            and output.get("reproduced") == record.get("reproduced")
+            and all(
+                isinstance(output.get(field), list)
+                and bool(output[field])
+                and all(isinstance(item, str) and item.strip() for item in output[field])
+                for field in ("challenges", "reproduction_commands", "artifact_refs")
             )
-        except (IntegrityError, ValidationError):
-            visible_task_bound = False
+        ):
+            return False
+        from .ledger import show_record
+
+        task = show_record(root, str(record["ledger_task_id"]))
+        visible_task_bound = bool(
+            record.get("visible_in_session") is True
+            and task.get("kind") == "TASK"
+            and task.get("status") == "closed"
+            and task.get("owner") == f"subagent:{thread}"
+            and task.get("data", {}).get("review_id") == review_id
+            and task.get("data", {}).get("review_output_sha256") == output_sha
+            and task.get("data", {}).get("packet_sha256") == packet_sha
+            and task.get("data", {}).get("challenge_nonce") == record.get("challenge_nonce")
+        )
+    except (IntegrityError, ValidationError, OSError, ValueError, KeyError):
+        return False
     independent_transport = (
         visible_task_bound
         and record.get("primary_attested_visible_subagent") is True

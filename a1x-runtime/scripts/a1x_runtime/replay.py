@@ -19,6 +19,35 @@ REPLAY_SOURCE_DIR = "source"
 REPLAY_CAMPAIGN_DIR = "campaign"
 
 
+def load_verified_replay(
+    root: Path,
+    replay_id: str,
+    *,
+    expected_run_id: str | None = None,
+) -> dict[str, Any]:
+    """Load the sealed canonical replay and reject a stale/tampered alias.
+
+    Replay verification writes both a sealed record under ``replays/<id>/``
+    and a convenient top-level materialization. Promotion must never trust the
+    unsealed materialization by itself.
+    """
+    replay_dir = root / "replays" / replay_id
+    canonical_path = replay_dir / "verification.json"
+    verify_seal(canonical_path, replay_dir / "verification.sha256")
+    canonical = read_json(canonical_path)
+    alias_path = root / "replays" / f"{replay_id}.json"
+    alias = read_json(alias_path)
+    if alias != canonical:
+        raise IntegrityError(f"replay materialization differs from sealed verification: {replay_id}")
+    if canonical.get("id") != replay_id:
+        raise IntegrityError(f"sealed replay has the wrong identity: {replay_id}")
+    if expected_run_id is not None and canonical.get("run_id") != expected_run_id:
+        raise ValidationError(
+            f"replay {replay_id} verifies {canonical.get('run_id')}, not supporting run {expected_run_id}"
+        )
+    return canonical
+
+
 def _git_head(path: Path) -> str | None:
     try:
         top = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True, timeout=10)

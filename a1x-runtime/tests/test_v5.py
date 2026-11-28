@@ -5,15 +5,18 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from a1x_runtime.campaign import add_hypothesis, add_obligation, init_campaign, migrate_campaign
 from a1x_runtime.blind_review import prepare_blind_review, qualifies, record_in_session_review
-from a1x_runtime.candidates import create_candidate
+from a1x_runtime.atomic import seal, write_json_atomic
+from a1x_runtime.candidates import check_gates, create_candidate, promote_validated
 from a1x_runtime.cli import build_parser
 from a1x_runtime.controller import assess_completion
 from a1x_runtime.errors import IntegrityError, ValidationError
 from a1x_runtime.ledger import add_record, link_runtime_ref, migrate_v4, query_ledger, update_record, verify_ledger
 from a1x_runtime.process import reject_model_argv
+from a1x_runtime.recon import record_coverage_gate, verify_coverage_gate
 
 
 class V5SingleSessionTests(unittest.TestCase):
@@ -38,6 +41,63 @@ class V5SingleSessionTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def _sealed_run(
+        self,
+        run_id: str,
+        *,
+        plan: dict,
+        mechanical_success: bool = True,
+        outcome: str = "supports",
+        property_violated: bool = True,
+    ) -> None:
+        run_dir = self.root / "runs" / run_id
+        run_dir.mkdir(exist_ok=True)
+        plan = {"id": run_id, "hypothesis_id": "HYP-0001", "property": "claims remain backed", **plan}
+        write_json_atomic(run_dir / "plan.json", plan)
+        plan_sha = seal(run_dir / "plan.json", run_dir / "plan.sha256")
+        write_json_atomic(
+            run_dir / "receipt.json",
+            {"run_id": run_id, "plan_sha256": plan_sha, "mechanical_success": mechanical_success},
+        )
+        seal(run_dir / "receipt.json", run_dir / "receipt.sha256")
+        write_json_atomic(
+            run_dir / "observation.json",
+            {"run_id": run_id, "outcome": outcome, "property_violated": property_violated},
+        )
+        seal(run_dir / "observation.json", run_dir / "observation.sha256")
+
+    def _sealed_replay(self, replay_id: str, run_id: str, *, passed: bool = True) -> dict:
+        replay = {"id": replay_id, "run_id": run_id, "passed": passed}
+        directory = self.root / "replays" / replay_id
+        directory.mkdir(exist_ok=True)
+        write_json_atomic(directory / "verification.json", replay)
+        seal(directory / "verification.json", directory / "verification.sha256")
+        write_json_atomic(self.root / "replays" / f"{replay_id}.json", replay)
+        return replay
+
+    def _bind_empty_recon_coverage(self) -> dict:
+        base = Path(self.temporary.name) / "recon-inputs"
+        base.mkdir(exist_ok=True)
+        scan = base / "entry-points.json"
+        coverage = base / "coverage-map.json"
+        scan.write_text(json.dumps({
+            "schema_version": 1,
+            "path_basis": "root-relative",
+            "scope_mode": "paths",
+            "scope_inputs": ["."],
+            "files": ["Target.sol"],
+            "entry_points": [],
+            "read_surfaces": [],
+            "problems": [],
+        }), encoding="utf-8")
+        coverage.write_text(json.dumps({
+            "schema_version": 1,
+            "files": [{"path": "Target.sol", "status": "analyzed", "evidence": ["Target.sol:1"]}],
+            "entry_points": [],
+            "read_surfaces": [],
+        }), encoding="utf-8")
+        return record_coverage_gate(self.root, entry_points_path=scan, coverage_map_path=coverage)
 
     def test_init_creates_compact_ledger_and_no_rounds(self) -> None:
         result = verify_ledger(self.root)
@@ -91,6 +151,24 @@ class V5SingleSessionTests(unittest.TestCase):
             add_record(self.root, kind="TASK", title="bad", statement="bad task", data={})
         with self.assertRaises(ValidationError):
             add_record(self.root, kind="SYN", title="bad", statement="summary only", data={"revised_attempt": "try again"})
+        scope = add_record(
+            self.root,
+            kind="SCOPE",
+            title="program",
+            statement="authorized target",
+            status="active",
+            priority="critical",
+            data={"impacts": ["direct theft"], "cost": "low"},
+        )
+        investigation = add_record(
+            self.root,
+            kind="INV",
+            title="settlement drift",
+            statement="settlement may preserve transient credit",
+            stage="hypothesis",
+            scope=[scope["id"]],
+            next_action="test settlement",
+        )
         task = add_record(
             self.root,
             kind="TASK",
@@ -104,8 +182,16 @@ class V5SingleSessionTests(unittest.TestCase):
             kind="SYN",
             title="revised settlement test",
             statement="combine callback waypoint and exact bound",
-            parents=[task["id"]],
-            data={"revised_attempt": "replay the callback at the exact bound and then settle", "next_discriminator": "compare post-settlement backing against the one-shot control"},
+            parents=[investigation["id"], task["id"]],
+            data={
+                "investigation_id": investigation["id"],
+                "inputs": [task["id"]],
+                "grounded_delta": "the callback reaches the exact bound before settlement",
+                "revised_attempt": "replay the callback at the exact bound and then settle",
+                "next_discriminator": "compare post-settlement backing against the one-shot control",
+                "follow_through": "pending",
+                "cost": "low",
+            },
         )
         self.assertEqual(query_ledger(self.root, kind="SYN")[0]["id"], synthesis["id"])
 
@@ -133,7 +219,7 @@ class V5SingleSessionTests(unittest.TestCase):
         campaign_before = (self.root / "campaign.json").read_bytes()
         result = migrate_campaign(self.root)
         self.assertFalse(result["migrated"])
-        self.assertEqual(result["campaign"]["runtime_version"], "5.0.0")
+        self.assertEqual(result["campaign"]["runtime_version"], "5.1.0")
         self.assertEqual((self.root / "campaign.json").read_bytes(), campaign_before)
 
     def test_invalid_cost_is_rejected_before_completion_and_model_cli_is_forbidden(self) -> None:
@@ -227,13 +313,14 @@ class V5SingleSessionTests(unittest.TestCase):
             next_action="execute sealed run",
             data={"cost": "low"},
         )
-        run_dir = self.root / "runs" / "RUN-0001"
-        run_dir.mkdir()
-        (run_dir / "plan.json").write_text(json.dumps({
-            "ledger_investigation_id": investigation["id"],
-            "ledger_experiment_id": experiment["id"],
-        }), encoding="utf-8")
-        (run_dir / "receipt.json").write_text(json.dumps({"mechanical_success": True}), encoding="utf-8")
+        self._sealed_run(
+            "RUN-0001",
+            plan={
+                "hypothesis_id": hypothesis["id"],
+                "ledger_investigation_id": investigation["id"],
+                "ledger_experiment_id": experiment["id"],
+            },
+        )
         link_runtime_ref(
             self.root,
             experiment["id"],
@@ -262,6 +349,170 @@ class V5SingleSessionTests(unittest.TestCase):
         linked = query_ledger(self.root, kind="INV")[0]
         self.assertEqual(candidate["ledger_investigation_id"], investigation["id"])
         self.assertIn(f"candidates/{candidate['id']}.json", linked["data"]["runtime_refs"])
+
+    def test_candidate_gate_rejects_wrong_replay_and_tampered_run_evidence(self) -> None:
+        self._sealed_run("RUN-0001", plan={"run_class": "candidate"})
+        self._sealed_run(
+            "RUN-0002",
+            plan={
+                "run_class": "control",
+                "control_for_run": "RUN-0001",
+                "control_contract": {
+                    "support_run": "RUN-0001",
+                    "claim": "remove the enabling transition",
+                    "changed_argv": [2],
+                },
+            },
+            outcome="refutes",
+            property_violated=False,
+        )
+        self._sealed_replay("REPLAY-0001", "RUN-0003")
+        candidate = {
+            "id": "CAND-0001",
+            "hypothesis_id": "HYP-0001",
+            "support_run": "RUN-0001",
+            "control_run": "RUN-0002",
+            "replay_id": "REPLAY-0001",
+            "root_cause": "split accounting",
+            "code_evidence": "Target.sol:1",
+            "reachability": "unprivileged sequence",
+            "property": "claims remain backed",
+            "impact": "direct theft",
+            "fidelity": {
+                "implementation_verified": True,
+                "configuration_verified": True,
+                "actor_verified": True,
+                "economics_verified": True,
+            },
+            "blind_reviews": ["BLIND-0001"],
+            "reviews": [],
+            "status": "candidate",
+        }
+        write_json_atomic(self.root / "candidates" / "CAND-0001.json", candidate)
+        with mock.patch("a1x_runtime.blind_review.qualifies", return_value=True):
+            result = check_gates(self.root, "CAND-0001")
+            self.assertEqual(result["mechanical_evidence_ceiling"], "E5")
+            self.assertTrue(any("not supporting run RUN-0001" in error for error in result["integrity_errors"]))
+            with self.assertRaises(ValidationError):
+                promote_validated(self.root, "CAND-0001")
+
+        self._sealed_replay("REPLAY-0002", "RUN-0001")
+        candidate["replay_id"] = "REPLAY-0002"
+        write_json_atomic(self.root / "candidates" / "CAND-0001.json", candidate)
+        observation = self.root / "runs" / "RUN-0001" / "observation.json"
+        tampered = json.loads(observation.read_text(encoding="utf-8"))
+        tampered["property_violated"] = False
+        write_json_atomic(observation, tampered)
+        with mock.patch("a1x_runtime.blind_review.qualifies", return_value=True):
+            result = check_gates(self.root, "CAND-0001")
+        self.assertEqual(result["mechanical_evidence_ceiling"], "E2")
+        self.assertTrue(any("seal mismatch" in error for error in result["integrity_errors"]))
+
+    def test_synthesis_requires_grounded_links_and_blocks_clean_completion(self) -> None:
+        scope = add_record(
+            self.root,
+            kind="SCOPE",
+            title="program",
+            statement="authorized target",
+            status="active",
+            priority="critical",
+            data={"impacts": ["direct theft"], "cost": "low"},
+        )
+        investigation = add_record(
+            self.root,
+            kind="INV",
+            title="accounting drift",
+            statement="callback may expose transient drift",
+            status="closed",
+            stage="closed",
+            priority="medium",
+            scope=[scope["id"]],
+        )
+        fact = add_record(
+            self.root,
+            kind="FACT",
+            title="reachable callback",
+            statement="the callback is reachable by an unprivileged actor",
+            status="closed",
+        )
+        with self.assertRaises(ValidationError):
+            add_record(
+                self.root,
+                kind="SYN",
+                title="unbound synthesis",
+                statement="summary only",
+                data={
+                    "revised_attempt": "try a different consumer",
+                    "next_discriminator": "execute it",
+                    "follow_through": "pending",
+                },
+            )
+        synthesis = add_record(
+            self.root,
+            kind="SYN",
+            title="consumer substitution",
+            statement="route the transient value into a different consumer",
+            status="open",
+            priority="high",
+            parents=[investigation["id"], fact["id"]],
+            scope=[scope["id"]],
+            data={
+                "investigation_id": investigation["id"],
+                "inputs": [fact["id"]],
+                "grounded_delta": "the callback is reachable before settlement",
+                "revised_attempt": "invoke the alternate consumer inside the callback",
+                "next_discriminator": "compare pre-settlement and post-settlement backing",
+                "follow_through": "pending",
+                "cost": "low",
+            },
+        )
+        result = assess_completion(self.root)
+        self.assertTrue(any(synthesis["id"] in item["reason"] for item in result["blockers"]))
+        with self.assertRaises(ValidationError):
+            update_record(
+                self.root,
+                synthesis["id"],
+                expected_revision=1,
+                changes={"status": "closed"},
+                reason="incorrectly close without follow-through",
+            )
+        current = query_ledger(self.root, kind="SYN")[0]
+        data = dict(current["data"])
+        data.update({"follow_through": "deferred", "deferred_reason": "upstream protocol state is unavailable"})
+        closed = update_record(
+            self.root,
+            synthesis["id"],
+            expected_revision=current["revision"],
+            changes={"status": "closed", "data": data},
+            reason="explicitly defer with a preserved blocker",
+        )
+        self.assertEqual(closed["data"]["follow_through"], "deferred")
+        with self.assertRaises(ValidationError):
+            add_record(
+                self.root,
+                kind="FACT",
+                title="missing evidence",
+                statement="must not accept a nonexistent artifact",
+                evidence=["recon/does-not-exist.json"],
+            )
+
+    def test_recon_coverage_attestation_is_required_and_source_bound(self) -> None:
+        before = assess_completion(self.root)
+        self.assertTrue(any(item["gate"] == "RECON-COVERAGE" for item in before["blockers"]))
+        recorded = self._bind_empty_recon_coverage()
+        verified = verify_coverage_gate(self.root)
+        self.assertTrue(verified["valid"])
+        self.assertEqual(verified["id"], recorded["id"])
+        extra = self.source / "NewInScope.sol"
+        extra.write_text("contract NewInScope {}\n", encoding="utf-8")
+        with self.assertRaises(IntegrityError):
+            verify_coverage_gate(self.root)
+        extra.unlink()
+        (self.source / "Target.sol").write_text("contract Target { uint changed; }\n", encoding="utf-8")
+        with self.assertRaises(IntegrityError):
+            verify_coverage_gate(self.root)
+        after = assess_completion(self.root)
+        self.assertTrue(any(item["gate"] == "RECON-COVERAGE" and "source changed" in item["reason"] for item in after["blockers"]))
 
     def test_public_cli_has_no_lane_or_external_review_commands(self) -> None:
         parser = build_parser()
@@ -292,7 +543,7 @@ class V5SingleSessionTests(unittest.TestCase):
         self.assertFalse({"TTS-BOOTSTRAP", "TTS-AGGREGATE", "TTS-HANDOFF", "TTS-ADAPTIVE", "RSA", "IMPACT-EXTENSION"} & gates)
 
     def test_visible_subagent_review_is_bound_to_a_ledger_task(self) -> None:
-        replay = {"id": "REPLAY-0001", "run_id": "RUN-0001", "passed": True}
+        replay = self._sealed_replay("REPLAY-0001", "RUN-0001")
         candidate = {
             "id": "CAND-0001",
             "replay_id": replay["id"],
@@ -301,7 +552,6 @@ class V5SingleSessionTests(unittest.TestCase):
             "control_run": "RUN-0002",
             "fidelity": {"implementation_verified": True},
         }
-        (self.root / "replays" / "REPLAY-0001.json").write_text(json.dumps(replay), encoding="utf-8")
         (self.root / "candidates" / "CAND-0001.json").write_text(json.dumps(candidate), encoding="utf-8")
         prepared = prepare_blind_review(self.root, "CAND-0001")
         task = query_ledger(self.root, kind="TASK")[0]
@@ -333,6 +583,11 @@ class V5SingleSessionTests(unittest.TestCase):
         self.assertTrue(qualifies(self.root, prepared["id"], "CAND-0001"))
         closed_task = query_ledger(self.root, kind="TASK")[0]
         self.assertEqual(closed_task["owner"], "subagent:independent_reviewer")
+        output_path = self.root / "reviews" / prepared["id"] / "review-output.json"
+        tampered = json.loads(output_path.read_text(encoding="utf-8"))
+        tampered["challenges"] = ["tampered after qualification"]
+        write_json_atomic(output_path, tampered)
+        self.assertFalse(qualifies(self.root, prepared["id"], "CAND-0001"))
 
 
 if __name__ == "__main__":

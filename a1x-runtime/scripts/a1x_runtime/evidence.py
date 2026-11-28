@@ -7,6 +7,7 @@ from .atomic import digest_bytes, read_json, verify_seal
 from .errors import IntegrityError, ValidationError
 from .hashing import file_sha256, is_relative_to, path_digest
 from .records import require_campaign, validate_id
+from .replay import load_verified_replay
 
 
 EVIDENCE_TYPES = {
@@ -56,12 +57,35 @@ def _run_receipt(root: Path, ref: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def load_verified_run_evidence(
+    root: Path,
+    run_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Load one run only after rechecking every promotion-relevant seal."""
+    run_id = validate_id(run_id, "RUN")
+    run_dir = root / "runs" / run_id
+    plan_path = run_dir / "plan.json"
+    receipt_path = run_dir / "receipt.json"
+    observation_path = run_dir / "observation.json"
+    verify_seal(plan_path, run_dir / "plan.sha256")
+    verify_seal(receipt_path, run_dir / "receipt.sha256")
+    verify_seal(observation_path, run_dir / "observation.sha256")
+    plan = read_json(plan_path)
+    receipt = read_json(receipt_path)
+    observation = read_json(observation_path)
+    if plan.get("id") != run_id or receipt.get("run_id") != run_id or observation.get("run_id") != run_id:
+        raise IntegrityError(f"sealed run evidence has inconsistent identity: {run_id}")
+    if receipt.get("plan_sha256") != digest_bytes(plan_path.read_bytes()):
+        raise IntegrityError(f"receipt is not bound to the sealed plan: {run_id}")
+    return plan, receipt, observation
+
+
 def _replay(root: Path, ref: dict[str, Any]) -> dict[str, Any]:
     replay_id = validate_id(str(ref.get("replay_id", "")), "REPLAY")
-    path = root / "replays" / f"{replay_id}.json"
-    replay = read_json(path)
+    replay = load_verified_replay(root, replay_id)
     if not replay.get("passed"):
         raise ValidationError(f"replay did not pass: {replay_id}")
+    path = root / "replays" / replay_id / "verification.json"
     return {
         "type": "replay",
         "replay_id": replay_id,

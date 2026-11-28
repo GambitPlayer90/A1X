@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Any
 
 from .atomic import exclusive_lock, read_json, verify_seal, write_json_atomic
-from .evidence import has_strong_refuting_evidence, normalize_evidence_refs
+from .evidence import has_strong_refuting_evidence, load_verified_run_evidence, normalize_evidence_refs
 from .errors import A1XError, BudgetError, ValidationError
+from .replay import load_verified_replay
 from .records import LEGACY_RUNTIME_SCHEMA, allocate_id, event, require_campaign, schema_for, update_research_counter, utc_now
 
 
@@ -16,7 +17,9 @@ def _require(path: Path, description: str) -> dict[str, Any]:
 
 
 def _require_run_ledger_link(root: Path, run_id: str, investigation_id: str) -> str:
-    plan = _require(root / "runs" / run_id / "plan.json", "sealed run plan")
+    run_dir = root / "runs" / run_id
+    verify_seal(run_dir / "plan.json", run_dir / "plan.sha256")
+    plan = _require(run_dir / "plan.json", "sealed run plan")
     if str(plan.get("ledger_investigation_id") or "") != investigation_id:
         raise ValidationError(f"{run_id} is not linked to candidate investigation {investigation_id}")
     experiment_id = str(plan.get("ledger_experiment_id") or "")
@@ -73,12 +76,16 @@ def create_candidate(
     if investigation.get("kind") != "INV" or scope_id not in investigation.get("scope", []):
         raise ValidationError("candidate investigation must reference the selected active program scope")
     support_experiment_id = _require_run_ledger_link(root, support_run, ledger_investigation_id)
-    _require(root / "runs" / support_run / "receipt.json", "supporting run")
+    _, support_receipt, support_observation = load_verified_run_evidence(root, support_run)
+    if not support_receipt.get("mechanical_success") or support_observation.get("outcome") != "supports":
+        raise ValidationError("candidate support run must be a sealed, mechanically successful supporting observation")
     if control_run:
         _require_run_ledger_link(root, control_run, ledger_investigation_id)
-        _require(root / "runs" / control_run / "receipt.json", "control run")
+        load_verified_run_evidence(root, control_run)
     if replay_id:
-        _require(root / "replays" / f"{replay_id}.json", "replay")
+        replay = load_verified_replay(root, replay_id, expected_run_id=support_run)
+        if replay.get("passed") is not True:
+            raise ValidationError("candidate replay must pass for the exact supporting run")
     candidate_id = allocate_id(root, "CAND")
     record = {
         "schema": schema_for(root),
@@ -192,31 +199,39 @@ def add_review(
     return record
 
 
-def _run_evidence(root: Path, run_id: str | None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    if not run_id:
-        return None, None
-    run_dir = root / "runs" / run_id
-    receipt = read_json(run_dir / "receipt.json") if (run_dir / "receipt.json").exists() else None
-    observation = read_json(run_dir / "observation.json") if (run_dir / "observation.json").exists() else None
-    return receipt, observation
-
-
 def check_gates(root: Path, candidate_id: str) -> dict[str, Any]:
     campaign = require_campaign(root)
     candidate = _require(root / "candidates" / f"{candidate_id}.json", "candidate")
-    support_receipt, support_observation = _run_evidence(root, candidate.get("support_run"))
-    control_receipt, control_observation = _run_evidence(root, candidate.get("control_run"))
-    replay = read_json(root / "replays" / f"{candidate['replay_id']}.json") if candidate.get("replay_id") else None
+    integrity_errors: list[str] = []
+    support_plan = support_receipt = support_observation = None
+    control_plan = control_receipt = control_observation = None
+    replay = None
+    try:
+        support_plan, support_receipt, support_observation = load_verified_run_evidence(
+            root, str(candidate.get("support_run") or "")
+        )
+    except (A1XError, OSError, ValueError) as exc:
+        integrity_errors.append(f"support evidence invalid: {exc}")
+    if candidate.get("control_run"):
+        try:
+            control_plan, control_receipt, control_observation = load_verified_run_evidence(
+                root, str(candidate["control_run"])
+            )
+        except (A1XError, OSError, ValueError) as exc:
+            integrity_errors.append(f"control evidence invalid: {exc}")
+    if candidate.get("replay_id"):
+        try:
+            replay = load_verified_replay(
+                root,
+                str(candidate["replay_id"]),
+                expected_run_id=str(candidate.get("support_run") or ""),
+            )
+        except (A1XError, OSError, ValueError) as exc:
+            integrity_errors.append(f"replay evidence invalid: {exc}")
     reviews = [read_json(root / "reviews" / f"{review_id}.json") for review_id in candidate.get("reviews", [])]
     paired_control = False
-    if candidate.get("support_run") and candidate.get("control_run"):
-        support_dir = root / "runs" / str(candidate["support_run"])
-        control_dir = root / "runs" / str(candidate["control_run"])
+    if support_plan and control_plan and candidate.get("support_run") and candidate.get("control_run"):
         try:
-            verify_seal(support_dir / "plan.json", support_dir / "plan.sha256")
-            verify_seal(control_dir / "plan.json", control_dir / "plan.sha256")
-            support_plan = read_json(support_dir / "plan.json")
-            control_plan = read_json(control_dir / "plan.json")
             control_contract = control_plan.get("control_contract")
             paired_control = (
                 control_plan.get("run_class") == "control"
@@ -287,6 +302,7 @@ def check_gates(root: Path, candidate_id: str) -> dict[str, Any]:
         "candidate_id": candidate_id,
         "mechanical_evidence_ceiling": highest,
         "gates": details,
+        "integrity_errors": integrity_errors,
         "warning": "These gates check artifact structure and declared review outcomes; they do not establish semantic truth or bounty eligibility.",
     }
 

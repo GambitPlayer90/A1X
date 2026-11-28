@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List Solidity entry points for the x-ray skill (Step 2 entry point scan).
+"""Inventory Solidity mutation entry points and externally callable readers.
 
 An entry point is a non-view, non-pure `external` or `public` function, plus
 `receive` and `fallback`. Each function header is read as a whole, from
@@ -21,8 +21,11 @@ ordinary function that is merely named `receive` or `fallback` ends with a
 Unreadable files and directories are reported on stderr, skipped, and counted
 in the summary.
 
-Skipped as entry points: interface and bodiless declarations (ending in `;`),
-internal/private functions, view/pure functions, and free functions. Every
+Skipped as mutation entry points: interface and bodiless declarations (ending in `;`),
+internal/private functions, view/pure functions, and free functions. Public/external
+view/pure functions and generated public state-variable getters are emitted separately
+as read surfaces so valuation, preview, oracle, and transient-state consumers cannot
+silently disappear from coverage. Every
 `.sol` file remains in the machine-readable inventory, including interfaces and mocks, so
 full-scope file accounting cannot silently omit a directory. `[abstract]` marks functions defined in abstract
 contracts; they are entry points of every concrete contract that inherits them,
@@ -55,6 +58,8 @@ SPECIAL_RE = re.compile(B + r"(receive|fallback)\s*\(")
 LEGACY_FALLBACK_RE = re.compile(B + r"function\s*\(")
 VISIBILITY_RE = re.compile(B + r"(external|public|internal|private)" + E)
 VIEW_OR_PURE_RE = re.compile(B + r"(view|pure|constant)" + E)
+PUBLIC_RE = re.compile(B + r"public" + E)
+GETTER_SKIP_TOKENS = {"constant", "immutable", "override", "transient"}
 
 
 def blank_comments_and_strings(src: str, strings: bool = True) -> str:
@@ -157,13 +162,69 @@ def containers(clean: str) -> list[tuple[int, int, str, str]]:
     return found
 
 
-def entry_points(path: str) -> list[tuple[int, str]]:
+def _top_level_statements(text: str, body_open: int, body_close: int) -> list[tuple[int, int]]:
+    """Return semicolon-terminated statements at contract-body depth zero."""
+    statements: list[tuple[int, int]] = []
+    start = body_open + 1
+    depth = 0
+    for index in range(body_open + 1, body_close):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(depth - 1, 0)
+            if depth == 0:
+                start = index + 1
+        elif char == ";" and depth == 0:
+            statements.append((start, index))
+            start = index + 1
+    return statements
+
+
+def _public_getters(
+    clean: str,
+    display: str,
+    scopes: list[tuple[int, int, str, str]],
+) -> list[tuple[int, str, str, str]]:
+    getters: list[tuple[int, str, str, str]] = []
+    excluded = ("event ", "error ", "using ", "type ", "struct ", "enum ", "modifier ", "function ")
+    for body_open, body_close, kind, contract_name in scopes:
+        if kind == "interface":
+            continue
+        for start, end in _top_level_statements(clean, body_open, body_close):
+            raw_statement = clean[start:end]
+            leading = len(raw_statement) - len(raw_statement.lstrip())
+            statement = raw_statement.strip()
+            if not statement or statement.startswith(excluded):
+                continue
+            public = PUBLIC_RE.search(statement)
+            if not public:
+                continue
+            tail = statement[public.end() :]
+            tail = re.sub(B + r"override\s*(?:\([^)]*\))?", " ", tail)
+            name = ""
+            for token in re.findall(IDENT, tail):
+                if token not in GETTER_SKIP_TOKENS:
+                    name = token
+                    break
+            if not name:
+                continue
+            declaration = re.sub(r"\s+", " ", display[start:end]).strip()
+            tag = f"[{kind}] " if kind in ("abstract", "library") else ""
+            text = f"{tag}{contract_name}.{name} [generated public getter] // {declaration}"
+            declaration_start = start + leading
+            getters.append((clean.count("\n", 0, declaration_start) + 1, text, "generated-getter", "view"))
+    return getters
+
+
+def callable_surfaces(path: str) -> tuple[list[tuple[int, str]], list[tuple[int, str, str, str]]]:
     with open(path, encoding="utf-8", errors="replace") as f:
         source = f.read()
     clean = blank_comments_and_strings(source)  # parsed: no comments, no string contents
     display = blank_comments_and_strings(source, strings=False)  # printed: strings kept
     scopes = containers(clean)
-    results = []
+    results: list[tuple[int, str]] = []
+    readers: list[tuple[int, str, str, str]] = []
     for regex in (FUNCTION_RE, SPECIAL_RE, LEGACY_FALLBACK_RE):
         for m in regex.finditer(clean):
             start = m.start()
@@ -174,8 +235,8 @@ def entry_points(path: str) -> list[tuple[int, str]]:
                 continue  # free function: cannot be external or public
             body_open, _, kind, name = max(enclosing, key=lambda s: s[0])
             between = clean[body_open + 1 : start]
-            if kind == "interface" or between.count("{") != between.count("}"):
-                continue  # interface member, or not declared at contract level
+            if between.count("{") != between.count("}"):
+                continue  # not declared at contract level
             if between.count("(") != between.count(")"):
                 continue  # function type inside a parameter list or mapping
             params_open = m.end() - 1
@@ -183,13 +244,17 @@ def entry_points(path: str) -> list[tuple[int, str]]:
             if params_close == -1:
                 continue
             end = header_end(clean, params_close + 1)
-            if end == -1 or clean[end] == ";":
-                continue  # bodiless declaration, or a function-type state variable
+            if end == -1:
+                continue
+            bodiless = clean[end] == ";"
             attributes = strip_parenthesized(clean[params_close + 1 : end])
             visibility = VISIBILITY_RE.search(attributes)
             if visibility and visibility.group(1) not in ("external", "public"):
                 continue  # no visibility only compiles before 0.5, where it means public
-            if VIEW_OR_PURE_RE.search(attributes):
+            mutability_match = VIEW_OR_PURE_RE.search(attributes)
+            if bodiless and not mutability_match:
+                continue  # mutating interface/abstract declaration is not an executable entry point
+            if kind == "interface" and not mutability_match:
                 continue
             if regex is FUNCTION_RE and m.group(1) == name:
                 continue  # pre-0.5 constructor
@@ -202,9 +267,24 @@ def entry_points(path: str) -> list[tuple[int, str]]:
             header = re.sub(r"^([^\s(]+)\s+\(", r"\1(", header)  # `receive ()` -> `receive()`
             if regex is FUNCTION_RE and m.group(1) in ("receive", "fallback"):
                 header += f" // ordinary function named {m.group(1)}, not the special {m.group(1)} function"
-            tag = f"[{kind}] " if kind in ("abstract", "library") else ""
-            results.append((clean.count("\n", 0, start) + 1, f"{tag}{name}.{header}"))
-    return sorted(results)
+            tag = f"[{kind}] " if kind in ("abstract", "interface", "library") else ""
+            line = clean.count("\n", 0, start) + 1
+            rendered = f"{tag}{name}.{header}"
+            if mutability_match:
+                mutability = "view" if mutability_match.group(1) == "constant" else mutability_match.group(1)
+                readers.append((line, rendered, "function", mutability))
+            else:
+                results.append((line, rendered))
+    readers.extend(_public_getters(clean, display, scopes))
+    return sorted(results), sorted(readers)
+
+
+def entry_points(path: str) -> list[tuple[int, str]]:
+    return callable_surfaces(path)[0]
+
+
+def read_surfaces(path: str) -> list[tuple[int, str, str, str]]:
+    return callable_surfaces(path)[1]
 
 
 def solidity_files(paths: list[str], problems: list[str]) -> list[str]:
@@ -277,11 +357,12 @@ def main() -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: cannot load scope: {exc}", file=sys.stderr)
         return 2
-    input_paths = (
-        [str((root or Path.cwd()) / path) for path in selected]
-        if args.scope_json
-        else selected
-    )
+    input_paths = [
+        str((root or Path.cwd()) / path)
+        if args.scope_json or (root is not None and not Path(path).is_absolute())
+        else path
+        for path in selected
+    ]
     missing = [p for p in input_paths if not os.path.exists(p)]
     if missing:
         print(f"error: path not found: {', '.join(missing)}", file=sys.stderr)
@@ -290,19 +371,28 @@ def main() -> int:
     files = solidity_files(input_paths, problems)
     try:
         displayed_files = [display_path(path, root) for path in files]
+        scope_inputs = (
+            list(selected)
+            if args.scope_json
+            else [display_path(path, root) for path in input_paths]
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     total, files_with_entries = 0, 0
+    total_readers, files_with_readers = 0, 0
     records: list[dict[str, object]] = []
+    reader_records: list[dict[str, object]] = []
     for path, displayed in zip(files, displayed_files, strict=True):
         try:
-            found = entry_points(path)
+            found, found_readers = callable_surfaces(path)
         except OSError as e:
             problems.append(f"{path}: {e.strerror or e}")
             continue
         if found:
             files_with_entries += 1
+        if found_readers:
+            files_with_readers += 1
         for line, text in found:
             print(f"{displayed}:{line}: {text}")
             records.append(
@@ -314,11 +404,27 @@ def main() -> int:
                 }
             )
         total += len(found)
+        for line, text, surface_kind, mutability in found_readers:
+            print(f"{displayed}:{line}: [read] {text}")
+            reader_records.append(
+                {
+                    "id": f"{displayed}:{line}:{text}",
+                    "path": displayed,
+                    "line": line,
+                    "declaration": text,
+                    "surface_kind": surface_kind,
+                    "mutability": mutability,
+                }
+            )
+        total_readers += len(found_readers)
     for problem in problems:
         print(f"warning: skipped {problem}", file=sys.stderr)
     if not files:
         print("warning: no .sol files to scan", file=sys.stderr)
-    summary = f"# {total} entry point(s) in {files_with_entries} of {len(files)} .sol file(s)"
+    summary = (
+        f"# {total} entry point(s) in {files_with_entries} of {len(files)} .sol file(s); "
+        f"{total_readers} read surface(s) in {files_with_readers} file(s)"
+    )
     if problems:
         summary += f"; {len(problems)} unreadable path(s) skipped, see stderr"
     print(summary)
@@ -330,9 +436,13 @@ def main() -> int:
                 {
                     "schema_version": 1,
                     "path_basis": "root-relative" if root else "invocation-relative",
+                    "scope_mode": "manifest" if args.scope_json else "paths",
+                    "scope_inputs": scope_inputs,
                     "files": displayed_files,
                     "entry_points": records,
+                    "read_surfaces": reader_records,
                     "files_with_entry_points": files_with_entries,
+                    "files_with_read_surfaces": files_with_readers,
                     "problems": problems,
                 },
                 indent=2,

@@ -23,7 +23,7 @@ def test_entry_inventory_keeps_interfaces_and_uses_root_relative_paths(tmp_path:
         encoding="utf-8",
     )
     (interfaces / "IA.sol").write_text(
-        "interface IA { function f() external; }",
+        "interface IA { function f() external; function quote() external view returns (uint256); }",
         encoding="utf-8",
     )
     output = tmp_path / "entry-points.json"
@@ -46,6 +46,36 @@ def test_entry_inventory_keeps_interfaces_and_uses_root_relative_paths(tmp_path:
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["files"] == ["A.sol", "interfaces/IA.sol"]
     assert [row["path"] for row in payload["entry_points"]] == ["A.sol"]
+    assert len(payload["read_surfaces"]) == 1
+    assert "[interface] IA.quote" in payload["read_surfaces"][0]["declaration"]
+
+
+def test_reader_inventory_includes_view_function_and_generated_public_getter(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "Oracle.sol").write_text(
+        """contract Oracle {
+    uint256 public price;
+    function quote() external view returns (uint256) { return price; }
+    function poke() external { price += 1; }
+}
+""",
+        encoding="utf-8",
+    )
+    output = tmp_path / "entry-points.json"
+    result = subprocess.run(
+        [sys.executable, str(ENTRY_POINTS), str(source), "--root", str(source), "--json-output", str(output)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert [row["declaration"].split("(", 1)[0] for row in payload["entry_points"]] == ["Oracle.poke"]
+    readers = payload["read_surfaces"]
+    assert any("Oracle.quote" in row["declaration"] and row["surface_kind"] == "function" for row in readers)
+    assert any("Oracle.price" in row["declaration"] and row["surface_kind"] == "generated-getter" for row in readers)
+    assert next(row["line"] for row in readers if "Oracle.price" in row["declaration"]) == 2
 
 
 def _gate_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -54,7 +84,16 @@ def _gate_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     graph = tmp_path / "graph.json"
     _write_json(
         scan,
-        {"schema_version": 1, "files": ["A.sol", "B.sol"], "entry_points": []},
+        {
+            "schema_version": 1,
+            "path_basis": "root-relative",
+            "scope_mode": "manifest",
+            "scope_inputs": ["A.sol", "B.sol"],
+            "files": ["A.sol", "B.sol"],
+            "entry_points": [],
+            "read_surfaces": [],
+            "problems": [],
+        },
     )
     _write_json(
         coverage,
@@ -65,6 +104,7 @@ def _gate_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
                 {"path": "B.sol", "status": "dependency-only", "evidence": ["B:1"]},
             ],
             "entry_points": [],
+            "read_surfaces": [],
             "graph_review": {
                 "reviewed_relations": ["calls"],
                 "filtered_relations": {},
@@ -113,13 +153,26 @@ def test_coverage_gate_matches_scanner_to_graph_inventory(tmp_path: Path) -> Non
 
 def test_coverage_gate_rejects_scanner_graph_omission(tmp_path: Path) -> None:
     scan, coverage, graph = _gate_fixture(tmp_path)
-    _write_json(scan, {"schema_version": 1, "files": ["A.sol"], "entry_points": []})
+    _write_json(
+        scan,
+        {
+            "schema_version": 1,
+            "path_basis": "root-relative",
+            "scope_mode": "manifest",
+            "scope_inputs": ["A.sol"],
+            "files": ["A.sol"],
+            "entry_points": [],
+            "read_surfaces": [],
+            "problems": [],
+        },
+    )
     _write_json(
         coverage,
         {
             "schema_version": 1,
             "files": [{"path": "A.sol", "status": "analyzed", "evidence": ["A:1"]}],
             "entry_points": [],
+            "read_surfaces": [],
             "graph_review": {
                 "reviewed_relations": ["calls"],
                 "filtered_relations": {},
@@ -133,3 +186,21 @@ def test_coverage_gate_rejects_scanner_graph_omission(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "entry-point scanner/Graphify scope mismatch" in result.stdout
     assert "B.sol" in result.stdout
+
+
+def test_coverage_gate_rejects_missing_reader_classification(tmp_path: Path) -> None:
+    scan, coverage, graph = _gate_fixture(tmp_path)
+    reader = {
+        "id": "A.sol:3:A.quote() external view returns (uint256)",
+        "path": "A.sol",
+        "line": 3,
+        "declaration": "A.quote() external view returns (uint256)",
+        "surface_kind": "function",
+        "mutability": "view",
+    }
+    scan_payload = json.loads(scan.read_text(encoding="utf-8"))
+    scan_payload["read_surfaces"] = [reader]
+    _write_json(scan, scan_payload)
+    result = _run_gate((scan, coverage, graph))
+    assert result.returncode == 1
+    assert "read-surface coverage mismatch" in result.stdout

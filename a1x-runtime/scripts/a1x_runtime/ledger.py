@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,18 @@ STATUSES = {
 }
 PRIORITIES = {"low", "medium", "high", "critical"}
 INVESTIGATION_STAGES = {"lead", "hypothesis", "candidate", "validated", "refuted", "closed"}
+SYNTHESIS_FOLLOW_THROUGH = {"pending", "executed", "refuted", "deferred"}
+_RUNTIME_REF_PATHS = {
+    "ART": lambda value: Path("evidence") / f"{value}.json",
+    "RUN": lambda value: Path("runs") / value / "receipt.json",
+    "REPLAY": lambda value: Path("replays") / value / "verification.json",
+    "CAND": lambda value: Path("candidates") / f"{value}.json",
+    "OBL": lambda value: Path("obligations") / f"{value}.json",
+    "HYP": lambda value: Path("hypotheses") / f"{value}.json",
+    "FORK": lambda value: Path("forks") / f"{value}.json",
+    "IMPACT": lambda value: Path("impact") / f"{value}.json",
+    "FRONTIER": lambda value: Path("frontier") / f"{value}.json",
+}
 
 
 def _paths(root: Path) -> tuple[Path, Path, Path]:
@@ -121,6 +134,47 @@ def validate_ledger(state: dict[str, Any]) -> dict[str, Any]:
                 raise ValidationError(f"synthesis {identifier} requires a revised testable attempt")
             if not _text(data.get("next_discriminator"), f"{identifier}.data.next_discriminator", required=False):
                 raise ValidationError(f"synthesis {identifier} requires a next discriminator")
+            investigation_id = _text(
+                data.get("investigation_id"),
+                f"{identifier}.data.investigation_id",
+                required=False,
+            )
+            if not investigation_id or investigation_id not in records or records[investigation_id].get("kind") != "INV":
+                raise ValidationError(f"synthesis {identifier} requires one existing investigation_id")
+            if investigation_id not in parents:
+                raise ValidationError(f"synthesis {identifier} must parent its investigation {investigation_id}")
+            inputs = _validate_ref_list(data.get("inputs"), f"{identifier}.data.inputs")
+            if not inputs:
+                raise ValidationError(f"synthesis {identifier} requires grounded input references")
+            if not _text(data.get("grounded_delta"), f"{identifier}.data.grounded_delta", required=False):
+                raise ValidationError(f"synthesis {identifier} requires the grounded information that changed the question")
+            follow_through = str(data.get("follow_through") or "")
+            if follow_through not in SYNTHESIS_FOLLOW_THROUGH:
+                raise ValidationError(f"synthesis {identifier} has invalid follow_through")
+            terminal = record.get("status") not in {"open", "active"}
+            if terminal and follow_through == "pending":
+                raise ValidationError(f"closed synthesis {identifier} cannot have pending follow-through")
+            if follow_through in {"executed", "refuted"}:
+                experiment_id = str(data.get("result_experiment_id") or "").strip()
+                result_artifact = str(data.get("result_artifact") or "").strip()
+                if not experiment_id and not result_artifact:
+                    raise ValidationError(f"synthesis {identifier} requires a resulting EXP or artifact")
+                if not _text(data.get("outcome"), f"{identifier}.data.outcome", required=False):
+                    raise ValidationError(f"synthesis {identifier} requires a grounded follow-through outcome")
+                if experiment_id:
+                    experiment = records.get(experiment_id)
+                    if not experiment or experiment.get("kind") != "EXP":
+                        raise ValidationError(f"synthesis {identifier} references an invalid resulting experiment")
+                    if investigation_id not in experiment.get("parents", []) or identifier not in experiment.get("parents", []):
+                        raise ValidationError(
+                            f"resulting experiment {experiment_id} must parent synthesis {identifier} and investigation {investigation_id}"
+                        )
+            if follow_through == "deferred" and not _text(
+                data.get("deferred_reason"),
+                f"{identifier}.data.deferred_reason",
+                required=False,
+            ):
+                raise ValidationError(f"deferred synthesis {identifier} requires an explicit reason")
         source = record.get("legacy_source")
         if source:
             source = str(source)
@@ -186,7 +240,7 @@ def _render_brief(state: dict[str, Any]) -> str:
     scopes = [item for item in records if item["kind"] == "SCOPE"]
     lines.extend([f"- {item['id']} [{item['status']}]: {item['statement']}" for item in scopes] or ["- No scope records yet."])
     lines.extend(["", "## Open investigations and tasks", ""])
-    focus = [item for item in active if item["kind"] in {"INV", "TASK", "EXP"}]
+    focus = [item for item in active if item["kind"] in {"INV", "TASK", "EXP", "SYN"}]
     for item in focus:
         suffix = f" Next: {item['next_action']}" if item.get("next_action") else ""
         lines.append(f"- {item['id']} [{item['priority']}/{item['status']}]: {item['statement']}{suffix}")
@@ -201,11 +255,61 @@ def _render_brief(state: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _validate_reference_exists(
+    root: Path,
+    state: dict[str, Any],
+    value: str,
+    field: str,
+) -> None:
+    reference = _text(value, field)
+    if reference in state["records"]:
+        return
+    if reference.startswith("sha256:"):
+        digest = reference.partition(":")[2]
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValidationError(f"{field} has an invalid sha256 reference")
+        if not (root / "evidence" / "objects" / "sha256" / digest[:2] / digest).is_file():
+            raise ValidationError(f"{field} references a missing immutable object: {reference}")
+        return
+    match = re.fullmatch(r"([A-Z]+)-[0-9]{4,}", reference)
+    if match and match.group(1) in _RUNTIME_REF_PATHS:
+        target = root / _RUNTIME_REF_PATHS[match.group(1)](reference)
+        if not target.exists():
+            raise ValidationError(f"{field} references a missing runtime record: {reference}")
+        return
+    relative = Path(reference)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValidationError(f"{field} must be a ledger ID, immutable digest, or safe campaign-relative path")
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValidationError(f"{field} escapes the campaign root") from exc
+    if not target.exists():
+        raise ValidationError(f"{field} references a missing path: {reference}")
+
+
+def _validate_external_references(root: Path, state: dict[str, Any]) -> None:
+    for identifier, record in state["records"].items():
+        for field in ("evidence", "artifacts"):
+            for index, value in enumerate(record.get(field, [])):
+                _validate_reference_exists(root, state, value, f"{identifier}.{field}[{index}]")
+        if record.get("kind") != "SYN":
+            continue
+        data = record.get("data", {})
+        for index, value in enumerate(data.get("inputs", [])):
+            _validate_reference_exists(root, state, value, f"{identifier}.data.inputs[{index}]")
+        result_artifact = str(data.get("result_artifact") or "").strip()
+        if result_artifact:
+            _validate_reference_exists(root, state, result_artifact, f"{identifier}.data.result_artifact")
+
+
 def _write_state(root: Path, state: dict[str, Any]) -> dict[str, Any]:
     ledger_path, tsv_path, brief_path = _paths(root)
     state["updated_at"] = utc_now()
     state["ledger_sha256"] = _state_digest(state)
     validate_ledger(state)
+    _validate_external_references(root, state)
     _write_json_atomic_raw(ledger_path, state)
     write_text_atomic(tsv_path, _render_tsv(state), mode=0o644)
     write_text_atomic(brief_path, _render_brief(state), mode=0o644)
@@ -249,7 +353,9 @@ def load_ledger(root: Path) -> dict[str, Any]:
     ledger_path, _, _ = _paths(root)
     if not ledger_path.is_file():
         return initialize_ledger(root)
-    return validate_ledger(read_json(ledger_path))
+    state = validate_ledger(read_json(ledger_path))
+    _validate_external_references(root, state)
+    return state
 
 
 def _next_id(state: dict[str, Any], kind: str) -> str:

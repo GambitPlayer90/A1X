@@ -67,12 +67,16 @@ For candidate challenge, `review prepare-blind` creates a nonce-bound packet and
 
 ## Synthesis
 
-Synthesize only after new grounded information changes the unresolved question. A `SYN` record names input IDs, compatible facts, contradictions, discarded assumptions, and provenance. It must include:
+Synthesize only after new grounded information changes the unresolved question. A `SYN` record parents the `INV` it revises and names grounded input IDs, compatible facts, contradictions, discarded assumptions, and provenance. It must include:
 
+- `investigation_id`: the parent `INV` whose question changes;
+- `inputs`: existing ledger IDs or campaign-relative artifacts;
+- `grounded_delta`: the new fact, bound, execution, or refutation that changed the question;
 - `revised_attempt`: a concrete executable or mechanically checkable next attempt;
 - `next_discriminator`: the test that separates remaining explanations.
+- `follow_through`: `pending`, `executed`, `refuted`, or `deferred`.
 
-The runtime rejects synthesis lacking these fields. A vote, majority conclusion, or summary is not synthesis.
+For `executed` or `refuted`, record an outcome plus either a resulting `EXP` or mechanically checkable artifact. The resulting `EXP` parents both the `SYN` and its `INV`. For `deferred`, record the exact reason. A high/critical, low/medium-cost synthesis remains a completion blocker while open. The runtime rejects missing or nonexistent references. A vote, majority conclusion, or summary is not synthesis.
 
 Use attack composition when executable transitions connect. Use investigation synthesis when different attempts establish complementary setup, bounds, settlement behavior, or refutations even though their call sequences cannot be concatenated.
 

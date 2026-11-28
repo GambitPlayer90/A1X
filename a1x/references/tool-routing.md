@@ -4,7 +4,7 @@ Choose tools by the unresolved question. Do not run a scanner suite for its own 
 
 ## Static inventory and control flow
 
-Start with `$a1x/scripts/entry_points.py`; use `$a1x/scripts/graph_summary.py` after Graphify and `$a1x/scripts/coverage_gate.py` after classification. These are deterministic scope-accounting helpers inherited from the X-Ray workflow. They do not decide access control, reachability, or vulnerability.
+Start with `$a1x/scripts/entry_points.py`; it emits separate mutation entry points and read surfaces, including generated public getters. Use `$a1x/scripts/graph_summary.py` after Graphify and `$a1x/scripts/coverage_gate.py` after classifying files, mutation surfaces, reader dependencies, timing, consumers, and obligations. Bind the passing inputs through `$a1x-runtime recon bind-coverage`. These are deterministic scope-accounting helpers inherited from the X-Ray workflow. They do not decide access control, reachability, or vulnerability.
 
 Use the compiler AST and Slither first for deterministic inventory, inheritance, storage writers, call relationships, modifiers, delegatecalls, external calls, and candidate CFG paths. Useful Slither printers/detectors may include contract/function summaries, call graphs, CFGs, data dependencies, inheritance, modifiers, and human summaries. Save tool version, command, build configuration, and raw output.
 

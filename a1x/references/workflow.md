@@ -17,14 +17,15 @@ Create one or more ledger `SCOPE` records. Put the exact impact statements in `d
 
 ## 2. Establish identity and coverage
 
-Run the bundled whole-header entry-point scanner before semantic triage. Its JSON file list is the coverage universe. If Graphify is available, create only the bundled compact summary and reconcile its Solidity-file set with the scanner. Maintain one `coverage-map.json` row per scanned file and entry point, with evidence and an obligation or non-applicability reason, and run the bundled coverage gate before closure. A failed or incomplete graph is a recorded gap, never permission to sample files.
+Run the bundled whole-header scanner before semantic triage. Its JSON file list is the coverage universe; its `entry_points` are mutation surfaces and its `read_surfaces` include public/external `view`/`pure` functions plus generated public getters. If Graphify is available, create only the bundled compact summary and reconcile its Solidity-file set with the scanner. Maintain one `coverage-map.json` row per scanned file, entry point, and read surface. Readers record dependencies, observation timing, external consumers, evidence, and an obligation or justified non-security relevance. Run the bundled coverage gate and bind the successful inputs through `a1x recon bind-coverage`; completion revalidates their seals and current scoped Solidity hashes. A failed or incomplete graph is a recorded gap, never permission to sample files.
 
 Verify source, compiler/settings, libraries, immutables, runtime bytecode, proxy implementation, beacons, facets/modules, upgrade state, roles, pause/configuration, tokens, oracles, bridges, strategies, and live liquidity at the pinned block.
 
 Build deterministic inventories for:
 
 - every in-scope Solidity file and contract;
-- external/public entry points and fallback/receive paths;
+- external/public mutation entry points and fallback/receive paths;
+- valuation, accounting, preview, oracle, and generated-getter read surfaces, including when consumers can observe them;
 - privileged and permissionless writers;
 - valuable or irreversible consumers;
 - callbacks, token hooks, delegatecalls, arbitrary/dynamic calls, and cross-domain message entry points;

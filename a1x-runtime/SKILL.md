@@ -27,11 +27,11 @@ The canonical research memory is `v5/ledger.json`, with deterministic `ledger.ts
 - `ledger verify --repair-views` to validate/rebuild projections;
 - `ledger migrate-v4` for an additive preview, then `--apply` to import legacy provenance without changing old records.
 
-An `INV` keeps its identity as its stage changes. A `TASK` requires one bounded decision question. A `SYN` requires a revised testable attempt and next discriminator. Keep large logs and immutable run/replay/artifact data outside the ledger and reference them by ID/path/hash.
+An `INV` keeps its identity as its stage changes. A `TASK` requires one bounded decision question. A `SYN` is parented by its `INV` and requires existing grounded inputs, the information delta, a revised attempt, next discriminator, and explicit follow-through state. Completed synthesis links its resulting experiment/artifact and outcome or records an exact deferral reason. Keep large logs and immutable run/replay/artifact data outside the ledger and reference them by existing ID/path/hash.
 
 ## Runs and evidence
 
-Record canonical `OBL`, `INV`, and one `EXP` per experiment before execution, then cross-link the typed obligation/hypothesis/run through their required `--ledger` arguments. Create a sealed run plan with property, support/refute predictions, exact inputs, command template, timeout, fork ID, and control relationship. Planning binds the run to its `EXP`; observation closes that experiment. Execute once; create a new run after changing plan or inputs. Record observations separately from raw output and interpretation.
+Record canonical `OBL`, `INV`, and one `EXP` per experiment before execution, then cross-link the typed obligation/hypothesis/run through their required `--ledger` arguments. Create a sealed run plan with property, support/refute predictions, exact inputs, command template, timeout, fork ID, and control relationship. Planning binds the run to its `EXP`; observation closes that experiment. Execute once; create a new run after changing plan or inputs. Record observations separately from raw output and interpretation. Candidate creation and promotion recheck sealed plans, receipts, observations, the exact support-run replay, and sealed independent-review output.
 
 Use `@env:NAME` only as a whole argument. The runtime resolves it at launch, redacts captured output, and preserves the template. Do not store secret values.
 
@@ -57,7 +57,7 @@ Replay support and control runs from clean recorded inputs. Candidate gates prov
 
 Record downstream impact properties and exact evidence. High-consequence claims require clean replay and an impact-specific causal control. Refutations require execution or a mechanically anchored impossibility proof.
 
-`controller assess` checks research continuity, ledger/scope/impact state, evidence integrity, unresolved bounded work, candidate/impact gates, and process cleanup. V5 has no bootstrap lanes, populations, candidate-expansion lanes, or RSA generations. `controller close` requires a matching clean, open-risk, budget-exhausted, or environment-blocked disposition.
+`controller assess` checks research continuity, ledger/scope/impact state, evidence integrity, unresolved bounded work including `SYN`, a sealed recon coverage attestation bound to current scoped Solidity hashes, candidate/impact gates, and process cleanup. V5 has no bootstrap lanes, populations, candidate-expansion lanes, or RSA generations. `controller close` requires a matching clean, open-risk, budget-exhausted, or environment-blocked disposition.
 
 ## Recovery
 

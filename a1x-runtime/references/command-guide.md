@@ -45,7 +45,16 @@ Create exact scope first:
   --data '{"impacts":["direct theft of user funds"],"exclusions":[],"attacker":"fresh unprivileged contract","cost":"low"}'
 ```
 
-Add `OBL`, `INV`, `EXP`, `FACT`, `TASK`, and `SYN` the same way. `TASK.data.question` is required. `SYN.data.revised_attempt` and `SYN.data.next_discriminator` are required.
+Add `OBL`, `INV`, `EXP`, `FACT`, `TASK`, and `SYN` the same way. `TASK.data.question` is required. A `SYN` parents its `INV` and supplies existing `inputs`, `grounded_delta`, `revised_attempt`, `next_discriminator`, and `follow_through`. Completed/refuted synthesis records an outcome and resulting `EXP` or artifact; deferral records an exact reason.
+
+```bash
+"$A1X_CLI" ledger add --root "$A1X_ROOT" --kind SYN \
+  --title 'callback-bound consumer substitution' \
+  --statement 'combine the reachable callback and exact numerical bound' \
+  --parent INV-0001 --parent FACT-0002 --scope SCOPE-0001 \
+  --priority high --status open --next-action 'execute the revised discriminator' \
+  --data '{"investigation_id":"INV-0001","inputs":["FACT-0002"],"grounded_delta":"the callback reaches the bound before settlement","revised_attempt":"invoke the alternate consumer before settlement","next_discriminator":"compare backing before and after settlement","follow_through":"pending","cost":"low"}'
+```
 
 ```bash
 "$A1X_CLI" ledger list --root "$A1X_ROOT" --kind INV --status open
@@ -65,6 +74,20 @@ Read the record first and use its current revision. A stale update fails closed.
 ```
 
 The doctor reports tool availability without reading secret values. Target probe output controls backend routing; installed does not mean compatible.
+
+## Recon coverage attestation
+
+Run the bundled `$a1x` scanner and coverage gate first. The scan must use `--root` so paths are source-relative. Its JSON contains both mutation `entry_points` and `read_surfaces`; the coverage map classifies both. After the gate passes, bind immutable snapshots to the campaign:
+
+```bash
+"$A1X_CLI" recon bind-coverage --root "$A1X_ROOT" \
+  --entry-points "$A1X_ROOT/recon/entry-points.json" \
+  --coverage-map "$A1X_ROOT/recon/coverage-map.json" \
+  --graph-summary "$A1X_ROOT/recon/graph-summary.json"
+"$A1X_CLI" recon verify-coverage --root "$A1X_ROOT"
+```
+
+Omit `--graph-summary` only when Graphify is unavailable and that limitation is recorded elsewhere. Verification rechecks input seals, exact file/entry/reader reconciliation, and current hashes of every scoped Solidity file. `controller assess` refuses clean completion without a current passing attestation.
 
 ## Session-owned Anvil fork
 
@@ -121,7 +144,7 @@ Every public run plan requires one canonical `EXP` parented by the hypothesis's 
 
 ## Replay and independent challenge
 
-Prepare and verify clean replay with the replay commands exposed by CLI help. Create a candidate only after support, control, and replay records are consistent. `candidate create` requires `--scope SCOPE-0001 --eligible-impact '<exact data.impacts string>'`; approximate category matches fail.
+Prepare and verify clean replay with the replay commands exposed by CLI help. Create a candidate only after support, control, and replay records are consistent. Candidate creation and every later promotion recheck the sealed plan, receipt, observation, canonical replay, and exact `replay.run_id == candidate.support_run` binding. `candidate create` requires `--scope SCOPE-0001 --eligible-impact '<exact data.impacts string>'`; approximate category matches fail.
 
 For the strongest independent evidence:
 
@@ -135,7 +158,7 @@ For the strongest independent evidence:
   --attest-visible-subagent
 ```
 
-The result JSON echoes `review_id`, `candidate_id`, `packet_sha256`, `challenge_nonce`, and `subagent_thread`, and supplies `verdict`, Boolean `reproduced`, and non-empty `challenges`, `reproduction_commands`, and `artifact_refs` arrays. The runtime validates the packet/result/task binding but cannot authenticate Codex UI thread identity; the primary attests what is visible through `/subagents`. It never launches the reviewer.
+The result JSON echoes `review_id`, `candidate_id`, `packet_sha256`, `challenge_nonce`, and `subagent_thread`, and supplies `verdict`, Boolean `reproduced`, and non-empty `challenges`, `reproduction_commands`, and `artifact_refs` arrays. Qualification rechecks the packet and review-output seals and their current candidate/replay/task bindings. The runtime cannot authenticate Codex UI thread identity; the primary attests what is visible through `/subagents`. It never launches the reviewer.
 
 ## Stateful fuzzing and solving
 
@@ -153,4 +176,4 @@ Record the exact downstream impact property, support/replay/control evidence, an
   --closure open-risk --conclusion 'validated candidates and disclosed unresolved paths'
 ```
 
-The completion gate checks ledger/scope/impact state, evidence, replay, bounded open work, and process cleanup. V5 has no lanes, populations, or RSA generations. Stop all recorded Anvil/fuzzer processes before closure.
+The completion gate checks ledger/scope/impact state, sealed recon coverage, evidence, exact replay binding, bounded open work including synthesis, and process cleanup. V5 has no lanes, populations, or RSA generations. Stop all recorded Anvil/fuzzer processes before closure.

@@ -25,7 +25,7 @@
 
 A1X is an authorized Solidity/EVM bug-bounty and audit workflow for investigations that do not fit inside one function or one transaction. It works backward from the program's exact eligible impacts, reconstructs the deployed system, derives protocol-specific obligations, builds attacker-reachable histories, and tests them with source-faithful execution.
 
-The current runtime is **5.0.0**. V5 replaces A1X's external lane/population controller with a persistent primary Codex session, selective visible subagents, deterministic local helpers, and an atomic campaign ledger.
+The current runtime is **5.1.0**. V5 replaces A1X's external lane/population controller with a persistent primary Codex session, selective visible subagents, deterministic local helpers, and an atomic campaign ledger. V5.1 binds candidate replay and sealed evidence to the exact support run, enforces synthesis follow-through, makes recon coverage a completion gate, and inventories security-relevant read surfaces.
 
 > [!IMPORTANT]
 > A1X is for explicitly authorized research. Adversarial transactions run only in local simulations or pinned local forks. A1X does not authorize live-chain exploitation, target selection, disclosure, submission, or automated transactions against live assets.
@@ -65,7 +65,7 @@ The useful research principle remains: independent attempts can contribute execu
 | Stage | Primary question | Durable result |
 |---|---|---|
 | **1. Scope and deployment** | What is authorized, deployed, attacker-reachable, excluded, and paid by this program? | Exact scope strings, attacker model, deployment identity, pinned block and hash |
-| **2. Recon and obligations** | What must remain true across assets, claims, authority, lifecycle, and consumers? | Complete entry-point coverage, system map, independent properties, falsifiable mechanisms |
+| **2. Recon and obligations** | What must remain true across assets, claims, authority, lifecycle, and consumers? | Sealed file, mutation-entry-point, and reader-surface coverage; system map; independent properties; falsifiable mechanisms |
 | **3. Reachable experiments** | What is the shortest faithful history that distinguishes the mechanism from its strongest alternative? | Forge/Anvil runs, traces, state deltas, fuzz counterexamples, numerical bounds, scoped refutations |
 | **4. Selective synthesis** | Can compatible transitions or complementary findings unlock a materially better test? | Revised executable attempt and next discriminator—not a vote or summary |
 | **5. Validate and account** | Is the behavior reachable, causal, replayable, economically real, and exactly in scope? | Clean replay, controls, net impact, harmed party, limitations, independent challenge |
@@ -104,7 +104,7 @@ A1X selects tools by the unresolved question instead of running every backend:
 
 | Question | Typical evidence producer |
 |---|---|
-| Complete source and entry-point coverage | Bundled manifest/coverage gates, compiler AST, Slither, Graphify |
+| Complete source, mutation, and reader coverage | Bundled manifest/coverage gates, generated-getter inventory, compiler AST, Slither, Graphify |
 | Deployed code and configuration identity | Cast/RPC, verified source, bytecode and proxy/module resolution |
 | Concrete behavior and traces | Forge tests and a disclosed pinned Anvil fork |
 | Sequence-dependent state-machine failures | Forge invariant tests, Echidna, Medusa, Wake, or ItyFuzz when target-compatible |
@@ -125,7 +125,7 @@ Each campaign stores a compact authoritative ledger in `v5/ledger.json`, with de
 | `EXP` | One falsifiable experiment attached to an investigation |
 | `FACT` | Grounded source, configuration, execution, numerical, or negative evidence |
 | `TASK` | One bounded question for the primary investigator or visible subagent |
-| `SYN` | A revised testable attempt plus its next discriminator |
+| `SYN` | Grounded inputs and information delta, revised attempt, next discriminator, and inspectable follow-through |
 
 Large logs, traces, receipts, replays, and immutable artifacts remain outside the ledger and are referenced by ID, path, and hash. Revision-checked updates prevent stale writers from silently overwriting current state.
 
@@ -212,6 +212,8 @@ local simulations and a pinned Anvil fork, stateful invariant fuzzing,
 exact arithmetic search, clean replay, and exact in-scope impact validation.
 ```
 
+That single skill invocation is the end-to-end entrypoint. The primary Codex session runs the lower-level runtime commands and invokes visible built-in subagents when the evidence checkpoints justify them; the operator does not invoke each phase separately.
+
 The primary investigator creates or resumes an `audit-work/<campaign>/` directory outside the target build tree. Campaign initialization records state only: it does not start Anvil, a worker, or a model process. Forks and fuzzers are started visibly when an experiment requires them and are stopped before closure.
 
 Detailed runtime examples are in the [V5 command guide](a1x-runtime/references/command-guide.md).
@@ -230,7 +232,7 @@ Supporting guides live in [`a1x/references/`](a1x/references/) and runtime mecha
 
 The V5 transformation was validated with:
 
-- 47 unit, regression, ledger, process-guard, and recon-helper checks;
+- 52 unit, regression, ledger, integrity, process-guard, and recon-helper checks;
 - 8 Foundry/Anvil integration checks;
 - installed-surface smoke tests and skill-package validation;
 - two independent fresh-context reviews.

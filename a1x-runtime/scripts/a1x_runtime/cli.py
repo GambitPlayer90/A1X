@@ -36,7 +36,7 @@ from .operations import propose_operation, recommend_next, transition_operation
 from .mcp_server import serve_stdio
 from .prestate import serve_http_bridge, serve_proxy
 from .prerequisite_graph import create_backtrack_branch, create_prerequisite_graph, resolve_backtrack_branch, verify_prerequisite_graph
-from .recon import active_recon, create_recon_pack
+from .recon import active_recon, create_recon_pack, record_coverage_gate, verify_coverage_gate
 from .research_progress import record_progress, verify_progress
 from .records import verify_event_chain
 from .runs import execute_run, observe_run, plan_run
@@ -507,6 +507,22 @@ def build_parser() -> argparse.ArgumentParser:
     recon_active = recon_sub.add_parser("active")
     recon_active.add_argument("--root", required=True, type=_root)
     recon_active.set_defaults(handler=lambda a: active_recon(a.root))
+    recon_bind_coverage = recon_sub.add_parser("bind-coverage")
+    recon_bind_coverage.add_argument("--root", required=True, type=_root)
+    recon_bind_coverage.add_argument("--entry-points", required=True, type=_root)
+    recon_bind_coverage.add_argument("--coverage-map", required=True, type=_root)
+    recon_bind_coverage.add_argument("--graph-summary", type=_root)
+    recon_bind_coverage.set_defaults(
+        handler=lambda a: record_coverage_gate(
+            a.root,
+            entry_points_path=a.entry_points,
+            coverage_map_path=a.coverage_map,
+            graph_summary_path=a.graph_summary,
+        )
+    )
+    recon_verify_coverage = recon_sub.add_parser("verify-coverage")
+    recon_verify_coverage.add_argument("--root", required=True, type=_root)
+    recon_verify_coverage.set_defaults(handler=lambda a: verify_coverage_gate(a.root))
 
     explorer = commands.add_parser("explorer", help="retrieve verified metadata through the host coordinator without exposing API credentials")
     explorer_sub = explorer.add_subparsers(dest="explorer_command", required=True)
