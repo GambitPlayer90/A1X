@@ -33,7 +33,7 @@ COUNTERS = {
     "validated_root_causes": 0,
 }
 
-CURRENT_RUNTIME_VERSION = "5.1.0"
+CURRENT_RUNTIME_VERSION = "5.2.0"
 
 CAMPAIGN_DIRECTORIES = (
     "obligations",

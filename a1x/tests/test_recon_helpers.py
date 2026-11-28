@@ -44,7 +44,10 @@ def test_entry_inventory_keeps_interfaces_and_uses_root_relative_paths(tmp_path:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 2
     assert payload["files"] == ["A.sol", "interfaces/IA.sol"]
+    assert [row["path"] for row in payload["source_inventory"]] == payload["files"]
+    assert all(len(row["sha256"]) == 64 for row in payload["source_inventory"])
     assert [row["path"] for row in payload["entry_points"]] == ["A.sol"]
     assert len(payload["read_surfaces"]) == 1
     assert "[interface] IA.quote" in payload["read_surfaces"][0]["declaration"]
@@ -85,11 +88,15 @@ def _gate_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     _write_json(
         scan,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "path_basis": "root-relative",
             "scope_mode": "manifest",
             "scope_inputs": ["A.sol", "B.sol"],
             "files": ["A.sol", "B.sol"],
+            "source_inventory": [
+                {"path": "A.sol", "sha256": "a" * 64},
+                {"path": "B.sol", "sha256": "b" * 64},
+            ],
             "entry_points": [],
             "read_surfaces": [],
             "problems": [],
@@ -156,11 +163,12 @@ def test_coverage_gate_rejects_scanner_graph_omission(tmp_path: Path) -> None:
     _write_json(
         scan,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "path_basis": "root-relative",
             "scope_mode": "manifest",
             "scope_inputs": ["A.sol"],
             "files": ["A.sol"],
+            "source_inventory": [{"path": "A.sol", "sha256": "a" * 64}],
             "entry_points": [],
             "read_surfaces": [],
             "problems": [],

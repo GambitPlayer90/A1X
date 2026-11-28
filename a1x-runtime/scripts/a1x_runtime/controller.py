@@ -351,6 +351,22 @@ def assess_completion(root: Path) -> dict[str, Any]:
     for item in ledger_records:
         if item.get("status") == "blocked" and item.get("priority") in {"high", "critical"}:
             open_risks.append({"kind": "external-prerequisite", "record": item["id"], "reason": item.get("next_action") or item["statement"]})
+        if (
+            item.get("kind") == "SYN"
+            and item.get("status") == "closed"
+            and item.get("priority") in {"high", "critical"}
+            and item.get("data", {}).get("follow_through") == "deferred"
+        ):
+            data = item["data"]
+            blocker_kind = data.get("blocker_kind")
+            if blocker_kind not in BLOCKER_KINDS:
+                blocker_kind = "external-prerequisite"
+            reopen_condition = data.get("reopen_condition") or "record the missing reopening condition"
+            open_risks.append({
+                "kind": blocker_kind,
+                "record": item["id"],
+                "reason": f"{data['deferred_reason']} (reopen when: {reopen_condition})",
+            })
 
     for path in sorted((root / "forks").glob("FORK-*.json")):
         fork = read_json(path)

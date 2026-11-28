@@ -42,6 +42,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -217,9 +218,9 @@ def _public_getters(
     return getters
 
 
-def callable_surfaces(path: str) -> tuple[list[tuple[int, str]], list[tuple[int, str, str, str]]]:
-    with open(path, encoding="utf-8", errors="replace") as f:
-        source = f.read()
+def _callable_surfaces_from_source(
+    source: str,
+) -> tuple[list[tuple[int, str]], list[tuple[int, str, str, str]]]:
     clean = blank_comments_and_strings(source)  # parsed: no comments, no string contents
     display = blank_comments_and_strings(source, strings=False)  # printed: strings kept
     scopes = containers(clean)
@@ -277,6 +278,20 @@ def callable_surfaces(path: str) -> tuple[list[tuple[int, str]], list[tuple[int,
                 results.append((line, rendered))
     readers.extend(_public_getters(clean, display, scopes))
     return sorted(results), sorted(readers)
+
+
+def callable_surfaces(path: str) -> tuple[list[tuple[int, str]], list[tuple[int, str, str, str]]]:
+    raw = Path(path).read_bytes()
+    return _callable_surfaces_from_source(raw.decode("utf-8", errors="replace"))
+
+
+def scanned_surfaces(
+    path: str,
+) -> tuple[list[tuple[int, str]], list[tuple[int, str, str, str]], str]:
+    """Parse and hash the same source bytes so coverage can bind to this exact scan."""
+    raw = Path(path).read_bytes()
+    found, readers = _callable_surfaces_from_source(raw.decode("utf-8", errors="replace"))
+    return found, readers, hashlib.sha256(raw).hexdigest()
 
 
 def entry_points(path: str) -> list[tuple[int, str]]:
@@ -383,12 +398,14 @@ def main() -> int:
     total_readers, files_with_readers = 0, 0
     records: list[dict[str, object]] = []
     reader_records: list[dict[str, object]] = []
+    source_inventory: list[dict[str, str]] = []
     for path, displayed in zip(files, displayed_files, strict=True):
         try:
-            found, found_readers = callable_surfaces(path)
+            found, found_readers, source_sha256 = scanned_surfaces(path)
         except OSError as e:
             problems.append(f"{path}: {e.strerror or e}")
             continue
+        source_inventory.append({"path": displayed, "sha256": source_sha256})
         if found:
             files_with_entries += 1
         if found_readers:
@@ -434,11 +451,12 @@ def main() -> int:
         destination.write_text(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "path_basis": "root-relative" if root else "invocation-relative",
                     "scope_mode": "manifest" if args.scope_json else "paths",
                     "scope_inputs": scope_inputs,
                     "files": displayed_files,
+                    "source_inventory": source_inventory,
                     "entry_points": records,
                     "read_surfaces": reader_records,
                     "files_with_entry_points": files_with_entries,

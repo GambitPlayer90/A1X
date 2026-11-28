@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 FILE_STATUSES = {"analyzed", "dependency-only", "inactive", "unreachable", "excluded"}
@@ -34,8 +35,8 @@ def main() -> int:
     coverage = _load(args.coverage_map)
     errors: list[str] = []
 
-    if scan.get("schema_version") != 1:
-        errors.append("entry-point scan must use schema_version 1")
+    if scan.get("schema_version") != 2:
+        errors.append("entry-point scan must use schema_version 2")
     if scan.get("path_basis") != "root-relative":
         errors.append("entry-point scan must use root-relative paths")
     if scan.get("scope_mode") not in {"paths", "manifest"} or not _nonempty_list(scan.get("scope_inputs")):
@@ -51,6 +52,18 @@ def main() -> int:
     expected_files = set(scanned_files)
     if len(scanned_files) != len(expected_files):
         errors.append("entry-point scan contains duplicate files")
+    source_inventory = scan.get("source_inventory")
+    if not isinstance(source_inventory, list):
+        errors.append("entry-point scan must contain a source_inventory array")
+        source_inventory = []
+    inventory_paths = [str(row.get("path")) for row in source_inventory if isinstance(row, dict)]
+    if len(inventory_paths) != len(source_inventory) or len(inventory_paths) != len(set(inventory_paths)):
+        errors.append("entry-point source inventory contains malformed or duplicate rows")
+    if set(inventory_paths) != expected_files:
+        errors.append("entry-point source inventory does not match scanned files")
+    for row in source_inventory:
+        if not isinstance(row, dict) or not re.fullmatch(r"[0-9a-f]{64}", str(row.get("sha256") or "")):
+            errors.append(f"{row.get('path') if isinstance(row, dict) else '<invalid>'}: invalid source sha256")
     file_rows = coverage.get("files") or []
     actual_file_list = [str(row.get("path")) for row in file_rows if isinstance(row, dict)]
     actual_files = set(actual_file_list)

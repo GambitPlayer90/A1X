@@ -62,7 +62,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any] | None:
     if method == "notifications/initialized":
         return None
     if method == "initialize":
-        return _response(identifier, result={"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "a1x-campaign", "version": "5.1.0"}})
+        return _response(identifier, result={"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "a1x-campaign", "version": "5.2.0"}})
     if method == "tools/list":
         return _response(identifier, result={"tools": _tool_definitions()})
     if method == "tools/call":

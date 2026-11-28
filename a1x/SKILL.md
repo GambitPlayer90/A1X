@@ -67,7 +67,7 @@ Re-aggregate only when new grounded information materially changes the unresolve
 - **Attack composition:** connect compatible executable state transitions.
 - **Investigation synthesis:** combine complementary facts, constraints, and refutations from attempts at the same blocker.
 
-Record synthesis as `SYN`, parented by the revised `INV`, with grounded input IDs, the information delta, a revised testable attempt, next discriminator, and `follow_through`. A completed synthesis must point to an `EXP` that parents both the `INV` and `SYN`, or to a mechanically checkable artifact and outcome; deferral requires an explicit reason. Open high-value bounded synthesis blocks clean completion. A summary or vote is not progress. Bound concurrent workers, synthesis inputs, and repeated attempts without information gain.
+Record synthesis as `SYN`, parented by the revised `INV`, with grounded input IDs, the information delta, a revised testable attempt, next discriminator, and `follow_through`. A completed synthesis must point to an `EXP` that parents both the `INV` and `SYN`, or to a mechanically checkable artifact and outcome. Deferral requires a blocker class, explicit reason, and reopening condition; closed high/critical deferred synthesis remains an open risk at completion. Open high-value bounded synthesis blocks clean completion. A summary or vote is not progress. Bound concurrent workers, synthesis inputs, and repeated attempts without information gain.
 
 ## Promotion and closure
 

@@ -25,7 +25,7 @@
 
 A1X is an authorized Solidity/EVM bug-bounty and audit workflow for investigations that do not fit inside one function or one transaction. It works backward from the program's exact eligible impacts, reconstructs the deployed system, derives protocol-specific obligations, builds attacker-reachable histories, and tests them with source-faithful execution.
 
-The current runtime is **5.1.0**. V5 replaces A1X's external lane/population controller with a persistent primary Codex session, selective visible subagents, deterministic local helpers, and an atomic campaign ledger. V5.1 binds candidate replay and sealed evidence to the exact support run, enforces synthesis follow-through, makes recon coverage a completion gate, and inventories security-relevant read surfaces.
+The current runtime is **5.2.0**. V5 replaces A1X's external lane/population controller with a persistent primary Codex session, selective visible subagents, deterministic local helpers, and an atomic campaign ledger. V5.1 bound candidate replay and sealed evidence to the exact support run, made recon coverage a completion gate, and inventoried security-relevant read surfaces. V5.2 binds recon scans to the exact parsed source bytes, requires performed or content-addressed synthesis follow-through, and preserves deferred high-consequence synthesis in completion risks.
 
 > [!IMPORTANT]
 > A1X is for explicitly authorized research. Adversarial transactions run only in local simulations or pinned local forks. A1X does not authorize live-chain exploitation, target selection, disclosure, submission, or automated transactions against live assets.

@@ -915,7 +915,7 @@ class A1XV4Test(unittest.TestCase):
 
     def test_mcp_facade_has_no_private_runtime_state(self) -> None:
         response = dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-        self.assertEqual(response["result"]["serverInfo"]["version"], "5.1.0")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "5.2.0")
         tools = dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         tool_names = {tool["name"] for tool in tools["result"]["tools"]}
         self.assertIn("campaign_show", tool_names)
@@ -1034,7 +1034,7 @@ class MigrationTest(unittest.TestCase):
             result = migrate_campaign(root)
             self.assertTrue(result["migrated"])
             self.assertEqual(result["migration"]["from_runtime_version"], "4.3.0")
-            self.assertEqual(result["campaign"]["runtime_version"], "5.1.0")
+            self.assertEqual(result["campaign"]["runtime_version"], "5.2.0")
             self.assertEqual(preserved.read_bytes(), before)
             self.assertTrue((root / "harnesses").is_dir())
             self.assertTrue((root / "orchestration" / "features.json").is_file())

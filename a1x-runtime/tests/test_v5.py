@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from a1x_runtime.campaign import add_hypothesis, add_obligation, init_campaign, migrate_campaign
+from a1x_runtime.artifacts import ingest_artifact
 from a1x_runtime.blind_review import prepare_blind_review, qualifies, record_in_session_review
 from a1x_runtime.atomic import seal, write_json_atomic
 from a1x_runtime.candidates import check_gates, create_candidate, promote_validated
@@ -82,11 +83,15 @@ class V5SingleSessionTests(unittest.TestCase):
         scan = base / "entry-points.json"
         coverage = base / "coverage-map.json"
         scan.write_text(json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "path_basis": "root-relative",
             "scope_mode": "paths",
             "scope_inputs": ["."],
             "files": ["Target.sol"],
+            "source_inventory": [{
+                "path": "Target.sol",
+                "sha256": hashlib.sha256((self.source / "Target.sol").read_bytes()).hexdigest(),
+            }],
             "entry_points": [],
             "read_surfaces": [],
             "problems": [],
@@ -219,7 +224,7 @@ class V5SingleSessionTests(unittest.TestCase):
         campaign_before = (self.root / "campaign.json").read_bytes()
         result = migrate_campaign(self.root)
         self.assertFalse(result["migrated"])
-        self.assertEqual(result["campaign"]["runtime_version"], "5.1.0")
+        self.assertEqual(result["campaign"]["runtime_version"], "5.2.0")
         self.assertEqual((self.root / "campaign.json").read_bytes(), campaign_before)
 
     def test_invalid_cost_is_rejected_before_completion_and_model_cli_is_forbidden(self) -> None:
@@ -478,7 +483,25 @@ class V5SingleSessionTests(unittest.TestCase):
             )
         current = query_ledger(self.root, kind="SYN")[0]
         data = dict(current["data"])
-        data.update({"follow_through": "deferred", "deferred_reason": "upstream protocol state is unavailable"})
+        incomplete_deferral = dict(data)
+        incomplete_deferral.update({
+            "follow_through": "deferred",
+            "deferred_reason": "upstream protocol state is unavailable",
+        })
+        with self.assertRaisesRegex(ValidationError, "blocker_kind"):
+            update_record(
+                self.root,
+                synthesis["id"],
+                expected_revision=current["revision"],
+                changes={"status": "closed", "data": incomplete_deferral},
+                reason="deferral without recovery metadata must fail",
+            )
+        data.update({
+            "follow_through": "deferred",
+            "deferred_reason": "upstream protocol state is unavailable",
+            "blocker_kind": "environment",
+            "reopen_condition": "a faithful upstream state fixture becomes available",
+        })
         closed = update_record(
             self.root,
             synthesis["id"],
@@ -487,6 +510,22 @@ class V5SingleSessionTests(unittest.TestCase):
             reason="explicitly defer with a preserved blocker",
         )
         self.assertEqual(closed["data"]["follow_through"], "deferred")
+        for family in ("value", "authority", "lifecycle", "numeric", "composition"):
+            write_json_atomic(
+                self.root / "orchestration" / f"coverage-{family}.json",
+                {"family": family, "status": "challenged", "evidence_refs": [], "limitations": "unit fixture"},
+            )
+        with mock.patch("a1x_runtime.recon.verify_coverage_gate", return_value={"valid": True}):
+            completion = assess_completion(self.root)
+        self.assertEqual(completion["blockers"], [])
+        risk = next(item for item in completion["open_risks"] if item["record"] == synthesis["id"])
+        self.assertEqual(risk["kind"], "environment")
+        self.assertIn("reopen when", risk["reason"])
+        self.assertEqual(completion["disposition"], "ENVIRONMENT_BLOCKED")
+        self.assertFalse(completion["ready"])
+        brief = (self.root / "v5" / "brief.md").read_text(encoding="utf-8")
+        self.assertIn("Deferred synthesis risks", brief)
+        self.assertIn(synthesis["id"], brief)
         with self.assertRaises(ValidationError):
             add_record(
                 self.root,
@@ -495,6 +534,166 @@ class V5SingleSessionTests(unittest.TestCase):
                 statement="must not accept a nonexistent artifact",
                 evidence=["recon/does-not-exist.json"],
             )
+
+    def test_synthesis_executed_requires_observed_bound_run(self) -> None:
+        scope = add_record(
+            self.root,
+            kind="SCOPE",
+            title="program",
+            statement="authorized target",
+            status="active",
+            priority="critical",
+            data={"impacts": ["direct theft"], "cost": "low"},
+        )
+        investigation = add_record(
+            self.root,
+            kind="INV",
+            title="settlement drift",
+            statement="settlement may preserve transient credit",
+            status="closed",
+            stage="closed",
+            scope=[scope["id"]],
+        )
+        fact = add_record(
+            self.root,
+            kind="FACT",
+            title="reachable callback",
+            statement="the callback is attacker reachable",
+            status="closed",
+        )
+        synthesis = add_record(
+            self.root,
+            kind="SYN",
+            title="settlement discriminator",
+            statement="execute the revised settlement test",
+            parents=[investigation["id"], fact["id"]],
+            scope=[scope["id"]],
+            data={
+                "investigation_id": investigation["id"],
+                "inputs": [fact["id"]],
+                "grounded_delta": "the callback reaches the disputed state",
+                "revised_attempt": "execute settlement from the callback state",
+                "next_discriminator": "measure backing after settlement",
+                "follow_through": "pending",
+                "cost": "low",
+            },
+        )
+        experiment = add_record(
+            self.root,
+            kind="EXP",
+            title="settlement run",
+            statement="run the settlement discriminator",
+            status="closed",
+            parents=[investigation["id"], synthesis["id"]],
+            scope=[scope["id"]],
+        )
+        executed_data = dict(synthesis["data"])
+        executed_data.update({
+            "follow_through": "executed",
+            "result_experiment_id": experiment["id"],
+            "outcome": "settlement preserved the measured discrepancy",
+        })
+        with self.assertRaisesRegex(ValidationError, "observed executed run"):
+            update_record(
+                self.root,
+                synthesis["id"],
+                expected_revision=synthesis["revision"],
+                changes={"status": "closed", "data": executed_data},
+                reason="must not claim an unperformed experiment",
+            )
+
+        self._sealed_run(
+            "RUN-0001",
+            plan={
+                "ledger_investigation_id": investigation["id"],
+                "ledger_experiment_id": experiment["id"],
+            },
+        )
+        linked = link_runtime_ref(
+            self.root,
+            experiment["id"],
+            "runs/RUN-0001/plan.json",
+            expected_kind="EXP",
+            reason="link executed discriminator",
+            status="active",
+        )
+        linked = link_runtime_ref(
+            self.root,
+            experiment["id"],
+            "runs/RUN-0001/observation.json",
+            expected_kind="EXP",
+            reason="link observed discriminator",
+            status="closed",
+        )
+        closed = update_record(
+            self.root,
+            synthesis["id"],
+            expected_revision=synthesis["revision"],
+            changes={"status": "closed", "data": executed_data},
+            reason="sealed execution completed the discriminator",
+        )
+        self.assertEqual(closed["data"]["follow_through"], "executed")
+        self.assertEqual(linked["status"], "closed")
+
+    def test_synthesis_artifact_route_requires_immutable_derivation(self) -> None:
+        scope = add_record(
+            self.root,
+            kind="SCOPE",
+            title="program",
+            statement="authorized target",
+            status="active",
+            data={"impacts": ["direct theft"]},
+        )
+        investigation = add_record(
+            self.root,
+            kind="INV",
+            title="source contradiction",
+            statement="a writer may be unreachable",
+            status="closed",
+            stage="closed",
+            scope=[scope["id"]],
+        )
+        fact = add_record(self.root, kind="FACT", title="writer", statement="writer inventory", status="closed")
+        proof = Path(self.temporary.name) / "writer-proof.json"
+        proof.write_text(json.dumps({"writer": "none", "reason": "all call paths are privileged"}), encoding="utf-8")
+        artifact = ingest_artifact(
+            self.root,
+            proof,
+            media_type="application/json",
+            role="source-discriminator",
+            producer="test",
+        )
+        base_data = {
+            "investigation_id": investigation["id"],
+            "inputs": [fact["id"]],
+            "grounded_delta": "the complete writer inventory excludes public callers",
+            "revised_attempt": "derive reachability from the complete call graph",
+            "next_discriminator": "check every external path to the writer",
+            "follow_through": "refuted",
+            "result_artifact": artifact["id"],
+            "outcome": "no attacker-reachable writer exists",
+        }
+        with self.assertRaisesRegex(ValidationError, "mechanically checkable derivation"):
+            add_record(
+                self.root,
+                kind="SYN",
+                title="unexplained artifact",
+                statement="artifact without derivation",
+                status="closed",
+                parents=[investigation["id"], fact["id"]],
+                data=base_data,
+            )
+        base_data["result_derivation"] = "enumerate every writer node and prove each incoming path requires an unavailable role"
+        synthesis = add_record(
+            self.root,
+            kind="SYN",
+            title="source refutation",
+            statement="content-addressed writer reachability refutation",
+            status="closed",
+            parents=[investigation["id"], fact["id"]],
+            data=base_data,
+        )
+        self.assertEqual(synthesis["data"]["result_artifact"], artifact["id"])
 
     def test_recon_coverage_attestation_is_required_and_source_bound(self) -> None:
         before = assess_completion(self.root)
@@ -512,7 +711,40 @@ class V5SingleSessionTests(unittest.TestCase):
         with self.assertRaises(IntegrityError):
             verify_coverage_gate(self.root)
         after = assess_completion(self.root)
-        self.assertTrue(any(item["gate"] == "RECON-COVERAGE" and "source changed" in item["reason"] for item in after["blockers"]))
+        self.assertTrue(any(
+            item["gate"] == "RECON-COVERAGE" and "source hashes do not match" in item["reason"]
+            for item in after["blockers"]
+        ))
+
+    def test_recon_rejects_scan_from_older_source_bytes(self) -> None:
+        base = Path(self.temporary.name) / "stale-recon-inputs"
+        base.mkdir()
+        scan = base / "entry-points.json"
+        coverage = base / "coverage-map.json"
+        old_hash = hashlib.sha256((self.source / "Target.sol").read_bytes()).hexdigest()
+        scan.write_text(json.dumps({
+            "schema_version": 2,
+            "path_basis": "root-relative",
+            "scope_mode": "paths",
+            "scope_inputs": ["."],
+            "files": ["Target.sol"],
+            "source_inventory": [{"path": "Target.sol", "sha256": old_hash}],
+            "entry_points": [],
+            "read_surfaces": [],
+            "problems": [],
+        }), encoding="utf-8")
+        coverage.write_text(json.dumps({
+            "schema_version": 1,
+            "files": [{"path": "Target.sol", "status": "analyzed", "evidence": ["old scan"]}],
+            "entry_points": [],
+            "read_surfaces": [],
+        }), encoding="utf-8")
+        (self.source / "Target.sol").write_text(
+            "contract Target { uint256 public price; function poke() external { price += 1; } }\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(IntegrityError, "source hashes do not match"):
+            record_coverage_gate(self.root, entry_points_path=scan, coverage_map_path=coverage)
 
     def test_public_cli_has_no_lane_or_external_review_commands(self) -> None:
         parser = build_parser()

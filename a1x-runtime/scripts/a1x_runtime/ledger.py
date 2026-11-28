@@ -22,6 +22,7 @@ STATUSES = {
 PRIORITIES = {"low", "medium", "high", "critical"}
 INVESTIGATION_STAGES = {"lead", "hypothesis", "candidate", "validated", "refuted", "closed"}
 SYNTHESIS_FOLLOW_THROUGH = {"pending", "executed", "refuted", "deferred"}
+SYNTHESIS_BLOCKER_KINDS = {"budget", "environment", "external-prerequisite", "tooling"}
 _RUNTIME_REF_PATHS = {
     "ART": lambda value: Path("evidence") / f"{value}.json",
     "RUN": lambda value: Path("runs") / value / "receipt.json",
@@ -169,12 +170,33 @@ def validate_ledger(state: dict[str, Any]) -> dict[str, Any]:
                         raise ValidationError(
                             f"resulting experiment {experiment_id} must parent synthesis {identifier} and investigation {investigation_id}"
                         )
-            if follow_through == "deferred" and not _text(
-                data.get("deferred_reason"),
-                f"{identifier}.data.deferred_reason",
-                required=False,
-            ):
-                raise ValidationError(f"deferred synthesis {identifier} requires an explicit reason")
+                    if experiment.get("status") != "closed":
+                        raise ValidationError(f"resulting experiment {experiment_id} must be closed after observation")
+                    runtime_refs = _validate_ref_list(
+                        experiment.get("data", {}).get("runtime_refs"),
+                        f"{experiment_id}.data.runtime_refs",
+                    )
+                    if not any(re.fullmatch(r"runs/RUN-[0-9]{4,}/observation\.json", ref) for ref in runtime_refs):
+                        raise ValidationError(
+                            f"resulting experiment {experiment_id} requires an observed executed run"
+                        )
+                if result_artifact and not _text(
+                    data.get("result_derivation"),
+                    f"{identifier}.data.result_derivation",
+                    required=False,
+                ):
+                    raise ValidationError(
+                        f"artifact-based synthesis {identifier} requires a mechanically checkable derivation"
+                    )
+            if follow_through == "deferred":
+                if record.get("status") != "closed":
+                    raise ValidationError(f"deferred synthesis {identifier} must use closed status")
+                if not _text(
+                    data.get("deferred_reason"),
+                    f"{identifier}.data.deferred_reason",
+                    required=False,
+                ):
+                    raise ValidationError(f"deferred synthesis {identifier} requires an explicit reason")
         source = record.get("legacy_source")
         if source:
             source = str(source)
@@ -249,6 +271,21 @@ def _render_brief(state: dict[str, Any]) -> str:
     lines.extend(["", "## Grounded facts and scoped refutations", ""])
     facts = [item for item in records if item["kind"] == "FACT" or item["status"] == "refuted"]
     lines.extend([f"- {item['id']} [{item['status']}]: {item['statement']}" for item in facts[-20:]] or ["- None."])
+    lines.extend(["", "## Deferred synthesis risks", ""])
+    deferred = [
+        item for item in records
+        if item["kind"] == "SYN" and item.get("data", {}).get("follow_through") == "deferred"
+    ]
+    for item in deferred:
+        data = item["data"]
+        blocker_kind = data.get("blocker_kind") or "external-prerequisite"
+        reopen_condition = data.get("reopen_condition") or "the reopening condition is recorded"
+        lines.append(
+            f"- {item['id']} [{item['priority']}/{blocker_kind}]: "
+            f"{data['deferred_reason']} Reopen when: {reopen_condition}"
+        )
+    if not deferred:
+        lines.append("- None.")
     lines.extend(["", "## Latest experiments and syntheses", ""])
     latest = [item for item in records if item["kind"] in {"EXP", "SYN"}][-12:]
     lines.extend([f"- {item['id']} [{item['status']}]: {item['statement']}" for item in latest] or ["- None."])
@@ -302,6 +339,47 @@ def _validate_external_references(root: Path, state: dict[str, Any]) -> None:
         result_artifact = str(data.get("result_artifact") or "").strip()
         if result_artifact:
             _validate_reference_exists(root, state, result_artifact, f"{identifier}.data.result_artifact")
+            if re.fullmatch(r"ART-[0-9]{4,}", result_artifact):
+                from .artifacts import verify_artifact
+
+                if verify_artifact(root, result_artifact).get("valid") is not True:
+                    raise IntegrityError(f"synthesis {identifier} result artifact failed content verification")
+            elif not re.fullmatch(r"sha256:[0-9a-f]{64}", result_artifact):
+                raise ValidationError(
+                    f"synthesis {identifier} result_artifact must be an immutable ART or sha256 object"
+                )
+        experiment_id = str(data.get("result_experiment_id") or "").strip()
+        if data.get("follow_through") not in {"executed", "refuted"} or not experiment_id:
+            continue
+        experiment = state["records"][experiment_id]
+        runtime_refs = experiment.get("data", {}).get("runtime_refs", [])
+        observed_run_ids = [
+            match.group(1)
+            for ref in runtime_refs
+            if (match := re.fullmatch(r"runs/(RUN-[0-9]{4,})/observation\.json", str(ref)))
+        ]
+        if not observed_run_ids:
+            raise ValidationError(f"synthesis {identifier} resulting experiment has no observed run")
+        from .evidence import load_verified_run_evidence
+
+        observations = []
+        for run_id in observed_run_ids:
+            if f"runs/{run_id}/plan.json" not in runtime_refs:
+                raise ValidationError(f"synthesis {identifier} observed run {run_id} lacks its EXP plan linkage")
+            plan, receipt, observation = load_verified_run_evidence(root, run_id)
+            if receipt.get("mechanical_success") is not True:
+                raise ValidationError(f"synthesis {identifier} run {run_id} did not complete mechanically")
+            if plan.get("ledger_experiment_id") != experiment_id:
+                raise IntegrityError(f"synthesis {identifier} run {run_id} is not bound to {experiment_id}")
+            if plan.get("ledger_investigation_id") != data.get("investigation_id"):
+                raise IntegrityError(
+                    f"synthesis {identifier} run {run_id} is not bound to {data.get('investigation_id')}"
+                )
+            observations.append(observation)
+        if data.get("follow_through") == "refuted" and not any(
+            observation.get("outcome") == "refutes" for observation in observations
+        ):
+            raise ValidationError(f"refuted synthesis {identifier} lacks a refuting run observation")
 
 
 def _write_state(root: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -321,6 +399,20 @@ def _write_views(root: Path, state: dict[str, Any]) -> None:
     _, tsv_path, brief_path = _paths(root)
     write_text_atomic(tsv_path, _render_tsv(state), mode=0o644)
     write_text_atomic(brief_path, _render_brief(state), mode=0o644)
+
+
+def _validate_deferred_metadata(record: dict[str, Any]) -> None:
+    if record.get("kind") != "SYN" or record.get("data", {}).get("follow_through") != "deferred":
+        return
+    data = record["data"]
+    if data.get("blocker_kind") not in SYNTHESIS_BLOCKER_KINDS:
+        raise ValidationError(f"deferred synthesis {record['id']} requires a valid blocker_kind")
+    if not _text(
+        data.get("reopen_condition"),
+        f"{record['id']}.data.reopen_condition",
+        required=False,
+    ):
+        raise ValidationError(f"deferred synthesis {record['id']} requires a reopening condition")
 
 
 def initialize_ledger(root: Path) -> dict[str, Any]:
@@ -418,6 +510,7 @@ def add_record(
             "updated_at": now,
             "legacy_source": legacy_source,
         }
+        _validate_deferred_metadata(record)
         state["records"][identifier] = record
         if legacy_source:
             state["legacy_map"][legacy_source] = identifier
@@ -454,6 +547,7 @@ def update_record(
             if record["kind"] != "INV" or changes["stage"] not in INVESTIGATION_STAGES:
                 raise ValidationError("invalid investigation stage transition")
         record.update(changes)
+        _validate_deferred_metadata(record)
         record["revision"] += 1
         record["updated_at"] = utc_now()
         record["transitions"].append({
