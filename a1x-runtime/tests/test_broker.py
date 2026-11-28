@@ -988,7 +988,7 @@ handoff = {
  'tested_obligation':'lane receives local execution without provider secrets','discriminator':'tool and UDS checks',
  'causal_identity':identity,'causal_anchors':{'writer':'environment-check.txt','guard':'environment-check.txt','consumer':'environment-check.txt','state':'environment-check.txt','property':'environment-check.txt','attacker_model':'environment-check.txt','state_shape':'environment-check.txt','transition_sequence':['environment-check.txt'],'deployment':'environment-check.txt'},
  'attacker_fingerprint':'synthetic lane','state_fingerprint':'local fork','impact_stage':'bounded','terminal_impact':False,
- 'execution':{'ran':False,'property':'infrastructure only','property_violated':None,'outcome':'environment verified','command_artifact':'','control_artifact':''},
+ 'execution':{'ran':False,'property':'infrastructure only','property_violated':None,'outcome':'inconclusive','command_artifact':'','control_artifact':''},
  'blocker':{'prerequisite':'blind target authorization','resolution_condition':'operator starts blind test','evidence_artifact':'environment-check.txt'},
  'evidence':[{'claim':'lane isolation is usable','observation':'tools, Wake MCP config, and fork UDS verified','artifact':'environment-check.txt'}],
  'artifacts':['environment-check.txt'],'refutations':[],'unresolved':['blind target not started'],'next_action':'await operator blind-test instruction',

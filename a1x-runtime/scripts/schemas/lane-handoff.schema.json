@@ -50,7 +50,7 @@
         "ran": {"type": "boolean"},
         "property": {"type": "string"},
         "property_violated": {"type": ["boolean", "null"]},
-        "outcome": {"type": "string"},
+        "outcome": {"type": "string", "enum": ["supports", "refutes", "inconclusive"]},
         "command_artifact": {"type": "string"},
         "control_artifact": {"type": "string"}
       },

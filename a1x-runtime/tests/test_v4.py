@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -17,10 +18,11 @@ from a1x_runtime.blind_review import (
     prepare_blind_review,
     qualifies,
 )
-from a1x_runtime.campaign import init_campaign, migrate_campaign
+from a1x_runtime.campaign import add_hypothesis, add_obligation, init_campaign, migrate_campaign
+from a1x_runtime.continuity import create_continuation_contract, record_continuation_attempt
 from a1x_runtime.evidence import normalize_evidence_refs
 from a1x_runtime.evidence_bundles import create_bundle, verify_bundle
-from a1x_runtime.errors import StateTransitionError, ValidationError
+from a1x_runtime.errors import IntegrityError, StateTransitionError, ValidationError
 from a1x_runtime.evaluation import adjudicate_trial, evaluation_summary, record_trial
 from a1x_runtime.mcp_server import dispatch
 from a1x_runtime.modern_evm import context_template, validate_execution_context
@@ -47,9 +49,16 @@ from a1x_runtime.scale import (
     _semantic_delta_against_population,
     _semantic_progress_key,
     _update_lineage_stagnation,
+    _validate_handoff,
+    aggregate_round,
+    bind_lane_runtime_evidence,
+    create_round,
     create_recombination_round,
     evolve_population,
 )
+from a1x_runtime.replay import prepare_replay, verify_replay
+from a1x_runtime.runs import execute_run, observe_run, plan_run
+from a1x_runtime.trace_facts import extract_trace_facts
 from a1x_runtime.witness import (
     canonicalize_prerequisites,
     needs_reachability_closure,
@@ -74,6 +83,126 @@ class A1XV4Test(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def _experiment_hypothesis(self) -> tuple[str, Path]:
+        script = self.source / "experiment.py"
+        script.write_text(
+            "import sys\nprint('supports' if sys.argv[1] == 'support' else 'refutes')\n",
+            encoding="utf-8",
+        )
+        obligation = add_obligation(
+            self.root,
+            title="scale property",
+            statement="the selected transition violates the property",
+            boundary="test process",
+            units="boolean",
+            oracle="support emits supports while the paired control emits refutes",
+        )
+        hypothesis = add_hypothesis(
+            self.root,
+            obligation_id=obligation["id"],
+            mechanism="selected transition controls the property",
+            sequence="execute the support or control selector",
+            support_prediction="support output is observed",
+            refute_prediction="control output is observed",
+            next_action="bind the sealed execution to scaling",
+        )
+        return hypothesis["id"], script
+
+    def _sealed_experiment(
+        self,
+        *,
+        hypothesis_id: str,
+        script: Path,
+        selector: str,
+        outcome: str,
+        property_violated: bool,
+        control_for: str | None = None,
+    ) -> tuple[str, str]:
+        planned = plan_run(
+            self.root,
+            hypothesis_id=hypothesis_id,
+            run_class="control" if control_for else "candidate",
+            cwd=self.source,
+            argv=[sys.executable, "experiment.py", selector],
+            timeout_seconds=30,
+            max_output_bytes=100_000,
+            inputs=[script],
+            property_statement="the selected transition violates the property",
+            support_prediction="support output is observed",
+            refute_prediction="control output is observed",
+            success_regex=outcome,
+            pass_env=[],
+            inherit_env=[],
+            fork_id=None,
+            control_for_run=control_for,
+            control_change_indices=[2] if control_for else [],
+            control_claim="replace the suspected enabling selector" if control_for else "",
+        )
+        run_id = planned["run_id"]
+        self.assertTrue(execute_run(self.root, run_id)["mechanical_success"])
+        observe_run(
+            self.root,
+            run_id,
+            outcome=outcome,
+            property_violated=property_violated,
+            observation=f"sealed {outcome} execution",
+            impact="scale fixture",
+            metrics=[],
+            limitations="synthetic integration fixture",
+        )
+        destination = Path(self.temporary.name) / f"replay-{run_id}"
+        prepare_replay(self.root, run_id=run_id, destination=destination)
+        replay = verify_replay(self.root, run_id=run_id, workspace=destination)
+        self.assertTrue(replay["passed"])
+        return run_id, replay["id"]
+
+    def _scale_handoff(self, lane_id: str, *, protected: bool = False) -> dict:
+        return {
+            "lane_id": lane_id,
+            "status": "candidate",
+            "mechanism": "sealed transition controls a property",
+            "mechanism_family": "accounting",
+            "consumer": "settlement",
+            "tested_obligation": "the selected transition violates the property",
+            "discriminator": "support selector versus paired control selector",
+            "causal_identity": {"writer": "selector", "guard": "mode", "consumer": "settlement", "state": "result", "property": "integrity"},
+            "attacker_fingerprint": "public caller",
+            "state_fingerprint": "support state",
+            "impact_stage": "primitive",
+            "terminal_impact": False,
+            "execution": {
+                "ran": True,
+                "property": "the selected transition violates the property",
+                "property_violated": True,
+                "outcome": "supports",
+                "command_artifact": "support.log",
+                "control_artifact": "control.log",
+            },
+            "blocker": {"prerequisite": "", "resolution_condition": "", "evidence_artifact": ""},
+            "evidence": [{"claim": "property changed", "observation": "support output observed", "artifact": "support.log"}],
+            "artifacts": ["support.log", "control.log"],
+            "refutations": [],
+            "unresolved": [],
+            "prerequisites": [],
+            "witness": {
+                "bug_class": "economic",
+                "source_faithful": True,
+                "setup_taint": "none",
+                "phases": [{"id": "prepare", "status": "reached", "property": "support state reached", "evidence_artifact": "support.log"}],
+                "signals": [{"kind": "invariant-drift", "value": "1", "unit": "boolean", "evidence_artifact": "support.log"}],
+            },
+            "continuation_replay": {
+                "required": protected,
+                "parent_manifests": [],
+                "parent_replayed": protected,
+                "assertions_preserved": protected,
+                "replay_artifact": "support.log" if protected else "",
+            },
+            "reachability_guard": {"artificial_prerequisite": False, "predicate": "none", "writer_paths": []},
+            "next_action": "continue",
+            "dimensions": {"evidence_level": "E4", "reachability": "high", "security_consequence": "high", "state_novelty": "high", "next_test_cost": "low"},
+        }
 
     def _artifact(self) -> str:
         path = Path(self.temporary.name) / "trace.json"
@@ -217,13 +346,287 @@ class A1XV4Test(unittest.TestCase):
             "status": "blocked",
             "execution": {"ran": True, "property_violated": True},
             "evidence": [{"artifact": "trace", "claim": "counterexample"}],
-            "runtime_verification": {"evidence_level": "E4"},
+            "runtime_verification": {"evidence_level": "E4", "runtime_evidence_bound": True},
         }
         self.assertTrue(_rsa_eligible(grounded))
         grounded["execution"]["property_violated"] = False
         self.assertFalse(_rsa_eligible(grounded))
         grounded["execution"] = {"ran": False, "property_violated": None}
         self.assertFalse(_rsa_eligible(grounded))
+
+    def test_text_files_cannot_self_promote_scale_evidence_or_protected_replay(self) -> None:
+        lane_dir = self.root / "scale" / "ROUND-8000" / "lanes" / "LANE-0001"
+        lane_dir.mkdir(parents=True)
+        for name, value in (("support.log", "authored support\n"), ("control.log", "authored control\n")):
+            (lane_dir / name).write_text(value, encoding="utf-8")
+        handoff = self._scale_handoff("LANE-0001")
+        handoff_path = lane_dir / "handoff.json"
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+        checked = _validate_handoff(
+            self.root,
+            handoff_path,
+            "LANE-0001",
+            round_id="ROUND-8000",
+            lineage_id="LINEAGE-text-only",
+            lane_role="exploration",
+        )
+        self.assertEqual(checked["runtime_verification"]["evidence_level"], "E1")
+        self.assertFalse(checked["runtime_verification"]["runtime_evidence_bound"])
+        self.assertFalse(_rsa_eligible(checked))
+
+        parent = lane_dir / "parent-evidence" / "A"
+        parent.mkdir(parents=True)
+        manifest = parent / "manifest.json"
+        manifest.write_text('{"files":[]}', encoding="utf-8")
+        protected = self._scale_handoff("LANE-0001", protected=True)
+        protected["continuation_replay"]["parent_manifests"] = [{
+            "label": "A",
+            "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        }]
+        handoff_path.write_text(json.dumps(protected), encoding="utf-8")
+        with self.assertRaisesRegex(IntegrityError, "host-verified runtime-evidence binding"):
+            _validate_handoff(
+                self.root,
+                handoff_path,
+                "LANE-0001",
+                round_id="ROUND-8000",
+                lineage_id="LINEAGE-text-only",
+                lane_role="witness-closure",
+            )
+
+    def test_scale_e4_requires_sealed_support_control_and_replays(self) -> None:
+        hypothesis_id, script = self._experiment_hypothesis()
+        support_run, support_replay = self._sealed_experiment(
+            hypothesis_id=hypothesis_id,
+            script=script,
+            selector="support",
+            outcome="supports",
+            property_violated=True,
+        )
+        control_run, control_replay = self._sealed_experiment(
+            hypothesis_id=hypothesis_id,
+            script=script,
+            selector="control",
+            outcome="refutes",
+            property_violated=False,
+            control_for=support_run,
+        )
+        prompt = Path(self.temporary.name) / "scale-prompt.md"
+        prompt.write_text("test sealed scale evidence\n", encoding="utf-8")
+        plan = create_round(
+            self.root,
+            prompt_file=prompt,
+            axes=["sealed-evidence"],
+            hypothesis_id=hypothesis_id,
+            per_lane_timeout=60,
+        )
+        lane_dir = self.root / "scale" / plan["id"] / "lanes" / "LANE-0001"
+        (lane_dir / "support.log").write_bytes((self.root / "runs" / support_run / "stdout.log").read_bytes())
+        (lane_dir / "control.log").write_bytes((self.root / "runs" / control_run / "stdout.log").read_bytes())
+        (lane_dir / "handoff.json").write_text(json.dumps(self._scale_handoff("LANE-0001")), encoding="utf-8")
+        binding = bind_lane_runtime_evidence(
+            self.root,
+            round_id=plan["id"],
+            lane_id="LANE-0001",
+            support_run=support_run,
+            support_replay=support_replay,
+            support_artifact="stdout.log",
+            control_run=control_run,
+            control_replay=control_replay,
+            control_artifact="stdout.log",
+        )
+        self.assertEqual(binding["support"]["run_id"], support_run)
+        aggregate = aggregate_round(self.root, round_id=plan["id"])
+        self.assertEqual(aggregate["invalid_lanes"], [])
+        checked = aggregate["handoffs"][0]
+        self.assertEqual(checked["runtime_verification"]["evidence_level"], "E4")
+        self.assertEqual(checked["runtime_verification"]["support_run_id"], support_run)
+        self.assertEqual(checked["runtime_verification"]["control_run_id"], control_run)
+        self.assertTrue(_rsa_eligible(checked))
+
+    def test_protected_scale_lane_requires_machine_checked_continuation_attempt(self) -> None:
+        hypothesis_id, script = self._experiment_hypothesis()
+        parent_run, parent_replay = self._sealed_experiment(
+            hypothesis_id=hypothesis_id,
+            script=script,
+            selector="support",
+            outcome="supports",
+            property_violated=True,
+        )
+        extension_run, extension_replay = self._sealed_experiment(
+            hypothesis_id=hypothesis_id,
+            script=script,
+            selector="support",
+            outcome="supports",
+            property_violated=True,
+        )
+        continuation = create_continuation_contract(self.root, {
+            "lineage_id": "LINEAGE-protected",
+            "parent_handoff": "ROUND-parent/LANE-0001",
+            "parent_run": parent_run,
+            "closure_mode": "witness",
+            "execution_topology": "atomic",
+            "actors": [{
+                "id": "attacker",
+                "role": "attacker",
+                "address": None,
+                "capabilities": ["invoke public selector"],
+                "authority_basis": "public entry point",
+            }],
+            "transactions": [{
+                "index": 0,
+                "actor": "attacker",
+                "action": "execute support selector",
+                "boundary": "transaction",
+                "expected_effects": ["support state"],
+                "obligations_created": [],
+            }],
+            "checkpoint": {"kind": "transaction-checkpoint", "transaction_index": 0, "waypoint": None},
+            "assertions": [{
+                "id": "parent-support",
+                "predicate": "parent support state remains reachable",
+                "expected": "supports",
+                "scope": "top-level execution",
+                "required": True,
+                "evidence_refs": [{"type": "run-receipt", "run_id": parent_run, "outcome": "supports"}],
+            }],
+            "preserve_assertions": ["parent-support"],
+            "selected_prerequisite": {
+                "id": "PREREQ-next",
+                "predicate": "next state is reached",
+                "success_condition": "extension executes",
+                "artificial": False,
+                "dependencies": [],
+            },
+            "reachability": {"predicate": "next state is reached", "writer_paths": []},
+        })
+        attempt = record_continuation_attempt(self.root, continuation["id"], {
+            "replay_id": parent_replay,
+            "result": "advanced",
+            "extension_run_id": extension_run,
+            "extension_replay_id": extension_replay,
+            "extension_evidence_refs": [
+                {"type": "run-receipt", "run_id": extension_run, "outcome": "supports"},
+                {"type": "replay", "replay_id": extension_replay},
+            ],
+            "assertions": [{
+                "id": "parent-support",
+                "passed": True,
+                "observed": "parent support state remained reachable",
+                "evidence_refs": [{"type": "replay", "replay_id": extension_replay}],
+            }],
+            "prerequisite_observation": "extension reached the next state",
+            "next_action": "continue closure",
+        })
+
+        prompt = Path(self.temporary.name) / "protected-prompt.md"
+        prompt.write_text("continue protected lineage\n", encoding="utf-8")
+        plan = create_round(
+            self.root,
+            prompt_file=prompt,
+            axes=["protected"],
+            hypothesis_id=hypothesis_id,
+            per_lane_timeout=60,
+        )
+        round_dir = self.root / "scale" / plan["id"]
+        lane_dir = round_dir / "lanes" / "LANE-0001"
+        plan_path = round_dir / "plan.json"
+        plan_record = read_json(plan_path)
+        plan_record["lanes"][0].update({
+            "lane_role": "witness-closure",
+            "lineage_id": "LINEAGE-protected",
+            "parent_handoffs": [{"round_id": "ROUND-parent", "lane_id": "LANE-0001"}],
+        })
+        write_json_atomic(plan_path, plan_record)
+        parent_dir = lane_dir / "parent-evidence" / "A"
+        parent_dir.mkdir(parents=True)
+        parent_handoff = self._scale_handoff("LANE-0001")
+        parent_handoff["runtime_verification"] = {
+            "evidence_level": "E3",
+            "runtime_evidence_bound": True,
+            "support_run_id": parent_run,
+            "support_replay_id": parent_replay,
+            "lineage_id": "LINEAGE-protected",
+        }
+        (parent_dir / "handoff.json").write_text(json.dumps(parent_handoff), encoding="utf-8")
+        manifest = parent_dir / "manifest.json"
+        manifest.write_text('{"files":[],"runtime_records":[]}', encoding="utf-8")
+        child = self._scale_handoff("LANE-0001", protected=True)
+        child["continuation_replay"]["parent_manifests"] = [{
+            "label": "A",
+            "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        }]
+        (lane_dir / "support.log").write_bytes((self.root / "runs" / extension_run / "stdout.log").read_bytes())
+        (lane_dir / "control.log").write_text("not promoted without a paired control\n", encoding="utf-8")
+        (lane_dir / "handoff.json").write_text(json.dumps(child), encoding="utf-8")
+        bind_lane_runtime_evidence(
+            self.root,
+            round_id=plan["id"],
+            lane_id="LANE-0001",
+            support_run=extension_run,
+            support_replay=extension_replay,
+            support_artifact="stdout.log",
+            continuation_id=continuation["id"],
+            attempt_id=attempt["id"],
+        )
+        checked = aggregate_round(self.root, round_id=plan["id"])["handoffs"][0]
+        self.assertEqual(checked["runtime_verification"]["evidence_level"], "E3")
+        self.assertEqual(checked["runtime_verification"]["continuation"]["attempt_id"], attempt["id"])
+        self.assertTrue(_rsa_eligible(checked))
+
+    def test_trace_frames_propagate_ancestor_reverts_and_separate_storage_owners(self) -> None:
+        def call_stack(target: str) -> list[str]:
+            return ["0x0", "0x0", target, "0x10000"]
+
+        facts = extract_trace_facts({
+            "to": "0x100",
+            "failed": True,
+            "structLogs": [
+                {"pc": 0, "op": "CALL", "depth": 1, "stack": call_stack("0xaaa")},
+                {"pc": 0, "op": "SSTORE", "depth": 2, "stack": ["0x1", "0x0"]},
+                {"pc": 1, "op": "RETURN", "depth": 2, "stack": []},
+                {"pc": 1, "op": "CALL", "depth": 1, "stack": call_stack("0xbbb")},
+                {"pc": 0, "op": "SSTORE", "depth": 2, "stack": ["0x2", "0x0"]},
+                {"pc": 1, "op": "RETURN", "depth": 2, "stack": []},
+                {"pc": 2, "op": "REVERT", "depth": 1, "stack": []},
+            ],
+        })
+        self.assertTrue(all(item["reverted"] for item in facts["writes"]))
+        self.assertEqual(
+            {item["storage_owner"] for item in facts["writes"]},
+            {
+                "0x0000000000000000000000000000000000000aaa",
+                "0x0000000000000000000000000000000000000bbb",
+            },
+        )
+        self.assertEqual(facts["overwrites"], [])
+        self.assertEqual(facts["transient_windows"], [])
+
+        enriched = extract_trace_facts({
+            "failed": False,
+            "structLogs": [
+                {"pc": 0, "op": "SSTORE", "depth": 2, "address": "0xaaa", "stack": ["0x1", "0x0"]},
+                {"pc": 1, "op": "SSTORE", "depth": 2, "address": "0xbbb", "stack": ["0x2", "0x0"]},
+            ],
+        })
+        self.assertEqual(enriched["overwrites"], [])
+
+        delegated = extract_trace_facts({
+            "to": "0x100",
+            "failed": False,
+            "structLogs": [
+                {"pc": 0, "op": "SSTORE", "depth": 1, "stack": ["0x1", "0x0"]},
+                {"pc": 1, "op": "DELEGATECALL", "depth": 1, "stack": ["0x0", "0xaaa", "0x10000"]},
+                {"pc": 0, "op": "SSTORE", "depth": 2, "stack": ["0x2", "0x0"]},
+                {"pc": 1, "op": "RETURN", "depth": 2, "stack": []},
+                {"pc": 2, "op": "STOP", "depth": 1, "stack": []},
+            ],
+        })
+        self.assertEqual(len(delegated["overwrites"]), 1)
+        self.assertEqual(
+            {item["storage_owner"] for item in delegated["writes"]},
+            {"0x0000000000000000000000000000000000000100"},
+        )
 
     def test_rsa_progress_requires_evidence_bound_semantic_delta(self) -> None:
         descriptors = {
@@ -299,6 +702,7 @@ class A1XV4Test(unittest.TestCase):
             "dimensions": {"evidence_level": "E3", "reachability": "medium", "security_consequence": "high", "state_novelty": "high", "next_test_cost": "medium"},
             "runtime_verification": {
                 "evidence_level": "E3",
+                "runtime_evidence_bound": True,
                 "origin_round": "ROUND-9000",
                 "origin_lane_id": lane_id,
                 "lineage_id": lineage_id,

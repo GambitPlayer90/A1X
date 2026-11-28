@@ -10,6 +10,7 @@ The authoritative campaign is an event-sourced state machine. MCP and CLI are fr
 - `evidence/bundles/` stores typed observations and interpretations with provenance, backend/version, budget, target hash, and replay context.
 - lane workspaces are writable overlays. Parent evidence is exported read-only for RSA children.
 - `continuations/` stores immutable continuation contracts plus attempts; advancement requires a distinct observed extension run after exact parent replay and a clean replay of that extension.
+- `scale/ROUND-*/lanes/LANE-*/runtime-evidence.json` is host-created and binds a lane to sealed runs, observations, replays, controls, and continuation/composition records. Worker-authored files cannot create E3/E4.
 - `compositions/`, `actors/`, `harnesses/`, `trace-facts/`, `surfaces/`, `oracles/`, and `solver-jobs/` hold the executable controller state used by completion assessment.
 
 ## Credential-free execution plane
@@ -37,5 +38,7 @@ A high-consequence lead is not closed by prose, a failed harness, or a normal-st
 A continuation contract binds one lineage to its actor model, transaction program, inherited assertions, selected prerequisite, execution topology, and either a between-transaction checkpoint or a within-transaction trace waypoint. A waypoint can be reproduced only by replaying the whole top-level transaction. Reachability closure is allocated separately from evidence promotion and requires an evidence-backed unprivileged writer path toward the artificial predicate.
 
 Executable component contracts expose preconditions, effects, resources, obligations, invalidations, and transaction/callback/time context. Composition has three explicit topologies: sequential `A ; B`, nested `A_pre -> B -> A_post`, and temporal `A@t0 -> transition -> B@t1`. Every promoted composition has an exact run and replay. Multi-actor programs similarly bind actor capability, honest policy, ordering assumptions, every planned step, and replay.
+
+Struct-log trace facts reconstruct call-frame ancestry before classifying writes. Revert status propagates from a failed ancestor to every descendant frame. Persistent and transient writes are grouped by storage context, not numeric depth: `CALL`/`STATICCALL` use the callee context, while `DELEGATECALL`/`CALLCODE` inherit the caller's storage owner. Unresolved creation or root addresses remain isolated by frame and are never merged across unknown owners.
 
 The scheduler counts stagnation only after an attributable research attempt. Operational failure uses a separate allowance. Waiting eligible lineages receive fair closure opportunities, while verified witness or information progress can use a bounded adaptive-depth allowance. Completion automatically sweeps open continuations, prerequisite nodes, backtracking branches, executable components, actor programs, solver witnesses, harness-expansion tasks, and protected evolution failures. Silence never converts an unresolved lineage into a clean result.

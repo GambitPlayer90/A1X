@@ -45,7 +45,7 @@ from .research_progress import record_progress, verify_progress
 from .records import verify_event_chain
 from .rsa import build_compatibility_graph, create_evidence_round
 from .runs import execute_run, observe_run, plan_run
-from .scale import aggregate_round, auto_select_frontier, create_recombination_round, create_round, evolve_population, run_round, select_frontier
+from .scale import aggregate_round, auto_select_frontier, bind_lane_runtime_evidence, create_recombination_round, create_round, evolve_population, merge_population, run_round, select_frontier
 from .security_oracles import create_security_oracle, evaluate_security_oracle, standard_oracle_profile, verify_oracle_evaluation
 from .scheduling import resource_snapshot, scheduling_state
 from .solver_adapters import create_solver_job, probe_solver_tools, register_external_solver_job, validate_solver_job, verify_solver_job
@@ -842,6 +842,33 @@ def build_parser() -> argparse.ArgumentParser:
     scale_aggregate.add_argument("--root", required=True, type=_root)
     scale_aggregate.add_argument("--round", required=True)
     scale_aggregate.set_defaults(handler=lambda a: aggregate_round(a.root, round_id=a.round))
+    scale_bind = scale_sub.add_parser("bind-evidence", help="bind a lane handoff to sealed run, replay, continuation, and composition records")
+    scale_bind.add_argument("--root", required=True, type=_root)
+    scale_bind.add_argument("--round", required=True)
+    scale_bind.add_argument("--lane", required=True)
+    scale_bind.add_argument("--support-run", required=True)
+    scale_bind.add_argument("--support-replay", required=True)
+    scale_bind.add_argument("--support-artifact", required=True)
+    scale_bind.add_argument("--control-run")
+    scale_bind.add_argument("--control-replay")
+    scale_bind.add_argument("--control-artifact")
+    scale_bind.add_argument("--continuation")
+    scale_bind.add_argument("--attempt")
+    scale_bind.add_argument("--composition")
+    scale_bind.set_defaults(handler=lambda a: bind_lane_runtime_evidence(
+        a.root,
+        round_id=a.round,
+        lane_id=a.lane,
+        support_run=a.support_run,
+        support_replay=a.support_replay,
+        support_artifact=a.support_artifact,
+        control_run=a.control_run,
+        control_replay=a.control_replay,
+        control_artifact=a.control_artifact,
+        continuation_id=a.continuation,
+        attempt_id=a.attempt,
+        composition_id=a.composition,
+    ))
     scale_select = scale_sub.add_parser("select")
     scale_select.add_argument("--root", required=True, type=_root)
     scale_select.add_argument("--round", required=True)
@@ -881,6 +908,17 @@ def build_parser() -> argparse.ArgumentParser:
             per_lane_timeout=a.per_lane_timeout,
         )
     )
+    scale_merge = scale_sub.add_parser("merge", help="merge a parent and fully bound child round into the next population pool")
+    scale_merge.add_argument("--root", required=True, type=_root)
+    scale_merge.add_argument("--parent-round", required=True)
+    scale_merge.add_argument("--child-round", required=True)
+    scale_merge.add_argument("--maximum", type=int, default=8)
+    scale_merge.set_defaults(handler=lambda a: merge_population(
+        a.root,
+        parent_round=a.parent_round,
+        child_round=a.child_round,
+        maximum=a.maximum,
+    ))
 
     scale_evolve = scale_sub.add_parser("evolve", help="run recursive aggregation generations with fresh diversity injections")
     scale_evolve.add_argument("--root", required=True, type=_root)

@@ -16,13 +16,15 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
-from .atomic import exclusive_lock, read_json, write_json_atomic, write_text_atomic
+from .atomic import digest_json, exclusive_lock, read_json, verify_seal, write_json_atomic, write_text_atomic
+from .composition import verify_composition
+from .continuity import verify_continuation_contract
 from .errors import BudgetError, IntegrityError, ValidationError
 from .features import enabled
 from .forks import start_fork, stop_fork
 from .hashing import file_sha256, is_relative_to, path_digest
 from .process import execute
-from .records import allocate_id, event, require_campaign, schema_for, utc_now
+from .records import allocate_id, event, require_campaign, schema_for, utc_now, validate_id
 from .sandbox import bubblewrap_preflight
 from .scheduling import record_lineage_attempts, resource_snapshot, select_fair_lineages
 from .witness import (
@@ -122,12 +124,13 @@ Requirements:
 - Preserve exact commands and artifact paths. Separate observations from interpretation.
 - Every artifact-valued schema field accepts exactly one path or one `path:line[:end]` anchor. Never join paths with semicolons, commas, or prose; put additional files in `artifacts` or `evidence`.
 - Execute discriminating experiments where feasible. Do not promote prose, scanner output, or a generated PoC without a protocol property violation.
+- Set `execution.outcome` to exactly `supports`, `refutes`, or `inconclusive`. Lane-authored files are research artifacts, not runtime execution proof: the host coordinator must bind the handoff to sealed run, observation, clean replay, and—when claimed—paired control records before automatic scaling can assign E3/E4 or select it for RSA.
 - Trace any new authority or capability through downstream value, upgrade, governance, settlement, and custody consumers. Mark whether the demonstrated consequence is terminal.
 - Preserve diversity: do not copy the most obvious mechanism unless independent evidence leads there.
 - Identify the tested obligation and discriminator. Provide human-readable writer/guard/consumer/state/property identity, a stable `attacker_fingerprint`, `state_fingerprint`, artifact anchors for each component, and the ordered transition sequence. The attacker-model and state-shape anchors must be dedicated one-line artifacts whose text exactly equals those two fingerprints. Use exact `path:line[:end]` source regions or execution/trace artifacts; coarse, generic, or mismatched actor/state anchors remain unique and are never used to discard another lead.
 - Track witness construction explicitly. Use the exact profile for the selected bug class: economic=`prepare,trigger,persist,settle,realize,impact`; settlement=`prepare,trigger,persist,settle,impact`; authorization=`prepare,cross-authorization,consume-authority,impact`; governance=`prepare,acquire-influence,queue,execute,impact`; upgrade=`prepare,obtain-upgrade-authority,install-code,invoke,impact`; liveness=`prepare,block,persist,bound-recovery,impact`; other=`prepare,trigger,persist,impact`. Mark structurally absent phases `not-applicable` (for example, persistence in a fully atomic exploit) rather than inventing them, and attach evidence to every reached phase. Record invariant/share-rate drift, internal credit, authorization crossing, persistent liveness failure, custody loss, and attacker net as separate phase-local signals. Never mark execution source-faithful when an exploit step relies on deal/storage/code mutation, privileged impersonation, or another unavailable capability.
 - Preserve inherited prerequisite IDs exactly. Close, narrow, or refute one only with an evidence artifact. Use an empty/new ID for a newly discovered prerequisite; the runtime assigns its stable ID. Do not split or rename blockers to manufacture progress.
-- Always populate `continuation_replay`. For a lane with `.a1x-parent-evidence`, hash every parent `manifest.json`, replay the inherited executable prefix before extending it, assert the inherited properties, and attach the replay log. For a lane without parents, set `required=false`, use an empty manifest array and replay artifact, and set both replay booleans false. A protected or recombination child is rejected unless parent replay and inherited assertions pass.
+- Always populate `continuation_replay`. For a lane with `.a1x-parent-evidence`, hash every parent `manifest.json`, replay the inherited executable prefix before extending it, assert the inherited properties, and attach the replay log. For a lane without parents, set `required=false`, use an empty manifest array and replay artifact, and set both replay booleans false. These declarations do not prove continuity: protected K=1 output also needs a host-verified continuation attempt, and K=2 output needs a host-verified executable composition bound to the same extension run and replay.
 - Always populate `reachability_guard`. If an experiment used artificial attack-path state, identify the exact predicate and attach a static, call-graph, or executed writer-path artifact showing whether an unprivileged protocol action can change the required state in the needed direction. Conditional mechanisms receive protected reachability work only when at least one such path is observed or concretely possible; arbitrary storage mutation alone is not eligible.
 - Attack intended usage. Deliberately construct attacker-controlled actors, identities, markets, tokens, callbacks, transaction boundaries, lifecycle interruptions, dust/empty/one-sided states, repeated cycles, alternate consumers, rounding thresholds, and governance/configuration denominators whenever relevant. A normal happy-path pass is not a security result.
 - A refutation must test the strongest reachable form of the mechanism and eliminate a necessary transition under the real attacker model. A revert, failed harness, ordinary-state test, intended-use argument, or absent current profit is inconclusive. A blocker must name the exact missing prerequisite, evidence artifact, and resolution condition. "Nothing found" is invalid.
@@ -442,7 +445,355 @@ def _normalize_identity(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9_.$:/-]+", value.lower()))
 
 
+def _normalized_claim(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _sealed_record(path: Path, seal_path: Path, description: str) -> dict[str, Any]:
+    try:
+        verify_seal(path, seal_path)
+        value = read_json(path)
+    except (OSError, ValueError, IntegrityError) as exc:
+        raise IntegrityError(f"scale runtime binding has an invalid {description}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise IntegrityError(f"scale runtime binding {description} is not an object")
+    return value
+
+
+def _verified_replay_record(root: Path, replay_id: str, run_id: str) -> dict[str, Any]:
+    replay_id = validate_id(replay_id, "REPLAY")
+    canonical_path = root / "replays" / replay_id / "verification.json"
+    canonical = _sealed_record(
+        canonical_path,
+        root / "replays" / replay_id / "verification.sha256",
+        f"replay {replay_id}",
+    )
+    materialized_path = root / "replays" / f"{replay_id}.json"
+    if not materialized_path.is_file() or read_json(materialized_path) != canonical:
+        raise IntegrityError(f"scale runtime binding replay materialization differs from its sealed record: {replay_id}")
+    if canonical.get("run_id") != run_id or canonical.get("passed") is not True:
+        raise IntegrityError(f"scale runtime binding replay does not pass for {run_id}: {replay_id}")
+    return canonical
+
+
+def _run_artifact(root: Path, run_id: str, relative: str) -> Path:
+    value = Path(relative)
+    if value.is_absolute() or ".." in value.parts or not relative.strip():
+        raise IntegrityError("scale runtime binding run artifact path is unsafe")
+    if value.as_posix() in {"plan.json", "receipt.json", "observation.json"} or value.suffix == ".sha256":
+        raise IntegrityError("scale runtime binding must name execution output, not runtime metadata")
+    run_dir = (root / "runs" / run_id).resolve()
+    artifact = (run_dir / value).resolve()
+    if not is_relative_to(artifact, run_dir) or not artifact.is_file():
+        raise IntegrityError(f"scale runtime binding run artifact is missing: {run_id}/{relative}")
+    return artifact
+
+
+def _verified_run_binding(
+    root: Path,
+    *,
+    run_id: str,
+    replay_id: str,
+    run_artifact: str,
+    lane_artifact: Path,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    run_id = validate_id(run_id, "RUN")
+    run_dir = root / "runs" / run_id
+    plan = _sealed_record(run_dir / "plan.json", run_dir / "plan.sha256", f"run plan {run_id}")
+    receipt = _sealed_record(run_dir / "receipt.json", run_dir / "receipt.sha256", f"run receipt {run_id}")
+    observation = _sealed_record(
+        run_dir / "observation.json",
+        run_dir / "observation.sha256",
+        f"run observation {run_id}",
+    )
+    if receipt.get("run_id") != run_id or receipt.get("mechanical_success") is not True:
+        raise IntegrityError(f"scale runtime binding run did not complete mechanically: {run_id}")
+    if observation.get("run_id") != run_id:
+        raise IntegrityError(f"scale runtime binding observation belongs to another run: {run_id}")
+    replay = _verified_replay_record(root, replay_id, run_id)
+    if _normalized_claim(plan.get("property")) != _normalized_claim(execution.get("property")):
+        raise IntegrityError(f"scale handoff property differs from sealed run property: {run_id}")
+    if observation.get("property_violated") is not execution.get("property_violated"):
+        raise IntegrityError(f"scale handoff property result differs from sealed observation: {run_id}")
+    if str(observation.get("outcome")) != str(execution.get("outcome")):
+        raise IntegrityError(f"scale handoff outcome differs from sealed observation: {run_id}")
+    recorded_artifact = _run_artifact(root, run_id, run_artifact)
+    if file_sha256(recorded_artifact) != file_sha256(lane_artifact):
+        raise IntegrityError(f"scale handoff artifact does not match sealed run artifact: {run_id}/{run_artifact}")
+    return {
+        "run_id": run_id,
+        "replay_id": replay_id,
+        "run_artifact": run_artifact,
+        "artifact_sha256": file_sha256(recorded_artifact),
+        "plan_sha256": file_sha256(run_dir / "plan.json"),
+        "receipt_sha256": file_sha256(run_dir / "receipt.json"),
+        "observation_sha256": file_sha256(run_dir / "observation.json"),
+        "replay_sha256": file_sha256(root / "replays" / replay_id / "verification.json"),
+        "plan": plan,
+        "observation": observation,
+        "replay": replay,
+    }
+
+
+def _validate_scale_runtime_binding(
+    root: Path,
+    handoff_path: Path,
+    handoff: dict[str, Any],
+    binding: dict[str, Any],
+    *,
+    lane_role: str,
+    lineage_id: str,
+    parent_handoffs: list[dict[str, Any]],
+    composition_topology: str | None,
+) -> dict[str, Any]:
+    immutable = {key: value for key, value in binding.items() if key != "binding_sha256"}
+    if digest_json(immutable) != binding.get("binding_sha256"):
+        raise IntegrityError("scale runtime evidence binding seal is invalid")
+    expected_round = handoff_path.parents[2].name
+    if binding.get("round_id") != expected_round or binding.get("lane_id") != handoff.get("lane_id"):
+        raise IntegrityError("scale runtime evidence binding identity does not match the handoff")
+    if binding.get("handoff_sha256") != file_sha256(handoff_path):
+        raise IntegrityError("scale handoff changed after its runtime evidence was bound")
+    execution = handoff.get("execution", {})
+    if execution.get("ran") is not True:
+        raise IntegrityError("scale runtime evidence binding requires a declared execution")
+    command_artifact = _lane_artifact(handoff_path, str(execution.get("command_artifact", "")))
+    if command_artifact is None:
+        raise IntegrityError("scale runtime evidence binding command artifact is missing")
+    support_binding = binding.get("support")
+    if not isinstance(support_binding, dict):
+        raise IntegrityError("scale runtime evidence binding requires a support run")
+    support = _verified_run_binding(
+        root,
+        run_id=str(support_binding.get("run_id", "")),
+        replay_id=str(support_binding.get("replay_id", "")),
+        run_artifact=str(support_binding.get("run_artifact", "")),
+        lane_artifact=command_artifact,
+        execution=execution,
+    )
+    verified_level = "E3"
+    control_summary = None
+    control_binding = binding.get("control")
+    if control_binding is not None:
+        if not isinstance(control_binding, dict):
+            raise IntegrityError("scale runtime evidence control binding is malformed")
+        control_artifact = _lane_artifact(handoff_path, str(execution.get("control_artifact", "")))
+        if control_artifact is None or control_artifact == command_artifact:
+            raise IntegrityError("scale E4 binding requires a distinct control artifact")
+        control_execution = {
+            "property": execution.get("property"),
+            "property_violated": False,
+            "outcome": "refutes",
+        }
+        control = _verified_run_binding(
+            root,
+            run_id=str(control_binding.get("run_id", "")),
+            replay_id=str(control_binding.get("replay_id", "")),
+            run_artifact=str(control_binding.get("run_artifact", "")),
+            lane_artifact=control_artifact,
+            execution=control_execution,
+        )
+        if control["artifact_sha256"] == support["artifact_sha256"]:
+            raise IntegrityError("scale E4 support and control execution artifacts are identical")
+        control_contract = control["plan"].get("control_contract")
+        if not (
+            execution.get("property_violated") is True
+            and support["observation"].get("outcome") == "supports"
+            and support["observation"].get("property_violated") is True
+            and control["plan"].get("run_class") == "control"
+            and control["plan"].get("control_for_run") == support["run_id"]
+            and isinstance(control_contract, dict)
+            and control_contract.get("support_run") == support["run_id"]
+            and bool(str(control_contract.get("claim", "")).strip())
+            and bool(control_contract.get("changed_argv"))
+            and control["plan"].get("hypothesis_id") == support["plan"].get("hypothesis_id")
+            and _normalized_claim(control["plan"].get("property")) == _normalized_claim(support["plan"].get("property"))
+        ):
+            raise IntegrityError("scale E4 binding lacks an explicitly paired causal negative control")
+        verified_level = "E4"
+        control_summary = {key: value for key, value in control.items() if key not in {"plan", "observation", "replay"}}
+
+    continuation_summary = None
+    composition_summary = None
+    unary_role = lane_role in {"witness-closure", "reachability-closure"}
+    recombination_role = lane_role in {"recombination", "evidence-recombination"}
+    continuation_binding = binding.get("continuation")
+    composition_id = binding.get("composition_id")
+    if unary_role:
+        if not isinstance(continuation_binding, dict) or composition_id is not None:
+            raise IntegrityError("unary protected scaling requires one continuation binding and no composition binding")
+        continuation_id = validate_id(str(continuation_binding.get("continuation_id", "")), "CONT")
+        attempt_id = validate_id(str(continuation_binding.get("attempt_id", "")), "ATTEMPT")
+        checked = verify_continuation_contract(root, continuation_id)
+        if not checked["valid"]:
+            raise IntegrityError("scale continuation contract failed verification: " + "; ".join(checked["errors"]))
+        continuation = checked["record"]
+        attempt_path = root / "continuations" / f"{attempt_id}.json"
+        if not attempt_path.is_file():
+            raise IntegrityError(f"scale continuation attempt is missing: {attempt_id}")
+        attempt = read_json(attempt_path)
+        parent_runs = {
+            str(item.get("runtime_verification", {}).get("support_run_id", ""))
+            for item in parent_handoffs
+            if str(item.get("runtime_verification", {}).get("support_run_id", ""))
+        }
+        expected_mode = "witness" if lane_role == "witness-closure" else "reachability"
+        if not (
+            len(parent_runs) == 1
+            and continuation.get("parent_run") in parent_runs
+            and continuation.get("lineage_id") == lineage_id
+            and continuation.get("closure_mode") == expected_mode
+            and attempt_id in continuation.get("attempts", [])
+            and attempt.get("continuation_id") == continuation_id
+            and attempt.get("extension_run_id") == support["run_id"]
+            and attempt.get("extension_replay_id") == support["replay_id"]
+            and attempt.get("result") != "operational-failure"
+        ):
+            raise IntegrityError("scale continuation binding does not connect the exact parent, lineage, extension run, and replay")
+        preserved = set(continuation.get("preserve_assertions", []))
+        observations = {str(item.get("id")): item for item in attempt.get("assertions", [])}
+        if any(observations.get(assertion_id, {}).get("passed") is not True for assertion_id in preserved):
+            raise IntegrityError("scale continuation attempt did not preserve every inherited assertion")
+        continuation_summary = {
+            "continuation_id": continuation_id,
+            "attempt_id": attempt_id,
+            "result": attempt.get("result"),
+            "parent_run": continuation.get("parent_run"),
+            "preserved_assertions": sorted(preserved),
+        }
+    elif recombination_role:
+        if continuation_binding is not None or not isinstance(composition_id, str):
+            raise IntegrityError("K=2 scaling requires one executable composition binding and no unary continuation binding")
+        checked = verify_composition(root, composition_id)
+        if not checked["valid"]:
+            raise IntegrityError("scale composition failed verification: " + "; ".join(checked["errors"]))
+        composition = checked["record"]
+        component_lineages = set()
+        for component_id in (composition.get("left_component"), composition.get("right_component")):
+            component = read_json(root / "compositions" / f"{component_id}.json")
+            component_lineages.add(str(component.get("lineage_id", "")))
+        parent_lineages = {handoff_lineage_id(item) for item in parent_handoffs}
+        if not (
+            composition.get("run_id") == support["run_id"]
+            and composition.get("replay_id") == support["replay_id"]
+            and composition.get("topology") == composition_topology
+            and component_lineages == parent_lineages
+        ):
+            raise IntegrityError("scale composition binding does not match the child run, topology, and exact parent lineages")
+        composition_summary = {
+            "composition_id": composition_id,
+            "topology": composition.get("topology"),
+            "components": sorted((composition.get("left_component"), composition.get("right_component"))),
+        }
+    elif continuation_binding is not None or composition_id is not None:
+        raise IntegrityError("independent scaling lanes cannot claim continuation or composition records")
+
+    return {
+        "evidence_level": verified_level,
+        "support": {key: value for key, value in support.items() if key not in {"plan", "observation", "replay"}},
+        "control": control_summary,
+        "continuation": continuation_summary,
+        "composition": composition_summary,
+    }
+
+
+def bind_lane_runtime_evidence(
+    root: Path,
+    *,
+    round_id: str,
+    lane_id: str,
+    support_run: str,
+    support_replay: str,
+    support_artifact: str,
+    control_run: str | None = None,
+    control_replay: str | None = None,
+    control_artifact: str | None = None,
+    continuation_id: str | None = None,
+    attempt_id: str | None = None,
+    composition_id: str | None = None,
+) -> dict[str, Any]:
+    require_campaign(root)
+    round_id = validate_id(round_id, "ROUND")
+    lane_id = validate_id(lane_id, "LANE")
+    round_dir = root / "scale" / round_id
+    plan = read_json(round_dir / "plan.json")
+    lane = next((item for item in plan.get("lanes", []) if item.get("lane_id") == lane_id), None)
+    if lane is None:
+        raise ValidationError(f"unknown scale lane: {round_id}/{lane_id}")
+    handoff_path = round_dir / str(lane["path"]) / "handoff.json"
+    if not handoff_path.is_file():
+        raise ValidationError("scale lane has no structured handoff to bind")
+    supplied_control = (control_run, control_replay, control_artifact)
+    if any(value is not None for value in supplied_control) and not all(value is not None for value in supplied_control):
+        raise ValidationError("scale control binding requires run, replay, and artifact together")
+    if (continuation_id is None) != (attempt_id is None):
+        raise ValidationError("scale continuation binding requires continuation and attempt together")
+    binding = {
+        "schema": schema_for(root),
+        "kind": "scale-runtime-evidence-binding",
+        "round_id": round_id,
+        "lane_id": lane_id,
+        "created_at": utc_now(),
+        "handoff_sha256": file_sha256(handoff_path),
+        "support": {"run_id": support_run, "replay_id": support_replay, "run_artifact": support_artifact},
+        "control": (
+            {"run_id": control_run, "replay_id": control_replay, "run_artifact": control_artifact}
+            if control_run is not None
+            else None
+        ),
+        "continuation": (
+            {"continuation_id": continuation_id, "attempt_id": attempt_id}
+            if continuation_id is not None
+            else None
+        ),
+        "composition_id": composition_id,
+    }
+    binding["binding_sha256"] = digest_json(binding)
+    handoff = read_json(handoff_path)
+    parents = _load_lane_parent_handoffs(handoff_path.parent)
+    _validate_scale_runtime_binding(
+        root,
+        handoff_path,
+        handoff,
+        binding,
+        lane_role=str(lane.get("lane_role", plan.get("purpose", "legacy"))),
+        lineage_id=str(lane.get("lineage_id") or handoff_lineage_id(handoff)),
+        parent_handoffs=parents,
+        composition_topology=lane.get("composition_topology"),
+    )
+    binding_path = handoff_path.parent / "runtime-evidence.json"
+    if binding_path.exists():
+        existing = read_json(binding_path)
+        _validate_scale_runtime_binding(
+            root,
+            handoff_path,
+            handoff,
+            existing,
+            lane_role=str(lane.get("lane_role", plan.get("purpose", "legacy"))),
+            lineage_id=str(lane.get("lineage_id") or handoff_lineage_id(handoff)),
+            parent_handoffs=parents,
+            composition_topology=lane.get("composition_topology"),
+        )
+        comparable_existing = {key: value for key, value in existing.items() if key not in {"created_at", "binding_sha256"}}
+        comparable_new = {key: value for key, value in binding.items() if key not in {"created_at", "binding_sha256"}}
+        if comparable_existing != comparable_new:
+            raise IntegrityError("scale runtime evidence binding is immutable; create a new lane for different evidence")
+        return existing
+    write_json_atomic(binding_path, binding, mode=0o444)
+    event(
+        root,
+        "scale.evidence-bound",
+        round_id=round_id,
+        lane_id=lane_id,
+        support_run=support_run,
+        evidence_level="E4" if control_run else "E3",
+    )
+    return binding
+
+
 def _validate_handoff(
+    root: Path,
     path: Path,
     lane_id: str,
     *,
@@ -451,6 +802,7 @@ def _validate_handoff(
     lineage_id: str | None = None,
     lane_role: str = "legacy",
     parent_handoffs: list[dict[str, Any]] | None = None,
+    composition_topology: str | None = None,
 ) -> dict[str, Any]:
     if not path.exists():
         raise IntegrityError("Codex did not produce the required structured handoff")
@@ -492,8 +844,12 @@ def _validate_handoff(
     identity = data.get("causal_identity", {})
     if any(not str(identity.get(field, "")).strip() for field in ("writer", "guard", "consumer", "state", "property")):
         raise IntegrityError("handoff causal identity must name writer, guard, consumer, state, and property")
+    assigned_lineage = lineage_id or handoff_lineage_id(data)
+    parents = parent_handoffs or []
     if data["status"] == "candidate" and not data.get("execution", {}).get("ran"):
         raise IntegrityError("candidate handoff requires a concrete executed experiment")
+    if data.get("execution", {}).get("outcome") not in {"supports", "refutes", "inconclusive"}:
+        raise IntegrityError("handoff execution outcome must be supports, refutes, or inconclusive")
     if require_execution and not data.get("execution", {}).get("ran"):
         raise IntegrityError("this scale-round purpose requires a concrete executed experiment in every lane")
     evidence_level = data.get("dimensions", {}).get("evidence_level", "E0")
@@ -596,17 +952,24 @@ def _validate_handoff(
         refutation_deferred = True
 
     verified_level = "E1" if evidence_artifacts and not missing_evidence else "E0"
-    command_artifact = _lane_artifact(path, str(data.get("execution", {}).get("command_artifact", "")))
-    if data.get("execution", {}).get("ran"):
-        if command_artifact is None:
-            raise IntegrityError("execution command_artifact does not exist in the lane")
-        verified_level = "E3"
-        control_value = str(data.get("execution", {}).get("control_artifact", ""))
-        control_artifact = _lane_artifact(path, control_value) if control_value else None
-        if data.get("execution", {}).get("property_violated") is True and control_artifact is not None and control_artifact != command_artifact:
-            verified_level = "E4"
-    assigned_lineage = lineage_id or handoff_lineage_id(data)
-    parents = parent_handoffs or []
+    runtime_binding = None
+    binding_path = path.parent / "runtime-evidence.json"
+    if binding_path.is_file():
+        runtime_binding = _validate_scale_runtime_binding(
+            root,
+            path,
+            data,
+            read_json(binding_path),
+            lane_role=lane_role,
+            lineage_id=assigned_lineage,
+            parent_handoffs=parents,
+            composition_topology=composition_topology,
+        )
+        verified_level = str(runtime_binding["evidence_level"])
+    elif protected_role:
+        raise IntegrityError(
+            "protected scale handoff requires a host-verified runtime-evidence binding to sealed execution, replay, and continuation/composition records"
+        )
     data["prerequisites"] = canonicalize_prerequisites(
         data.get("prerequisites"),
         lineage_id=assigned_lineage,
@@ -645,6 +1008,13 @@ def _validate_handoff(
             }
             for parent in parents
         ],
+        "support_run_id": runtime_binding.get("support", {}).get("run_id") if runtime_binding else None,
+        "support_replay_id": runtime_binding.get("support", {}).get("replay_id") if runtime_binding else None,
+        "control_run_id": runtime_binding.get("control", {}).get("run_id") if runtime_binding and runtime_binding.get("control") else None,
+        "control_replay_id": runtime_binding.get("control", {}).get("replay_id") if runtime_binding and runtime_binding.get("control") else None,
+        "continuation": runtime_binding.get("continuation") if runtime_binding else None,
+        "composition": runtime_binding.get("composition") if runtime_binding else None,
+        "runtime_evidence_bound": runtime_binding is not None,
         "refutation_deferred": refutation_deferred,
         **causal,
         "evidence_artifact_sha256": [file_sha256(_lane_artifact(path, value)) for value in evidence_artifacts],
@@ -760,6 +1130,7 @@ def _probe_lane_fork_transports(workspace: Path, fork_record: dict[str, Any]) ->
 
 def _run_lane(
     *,
+    root: Path,
     lane_dir: Path,
     lane_id: str,
     round_id: str,
@@ -774,6 +1145,7 @@ def _run_lane(
     require_execution: bool,
     lineage_id: str | None = None,
     lane_role: str = "legacy",
+    composition_topology: str | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     workspace = lane_dir / "workspace"
@@ -935,6 +1307,7 @@ def _run_lane(
     if result.exit_code == 0 and not result.timed_out:
         try:
             handoff = _validate_handoff(
+                root,
                 handoff_path,
                 lane_id,
                 require_execution=require_execution,
@@ -942,6 +1315,7 @@ def _run_lane(
                 lineage_id=lineage_id,
                 lane_role=lane_role,
                 parent_handoffs=_load_lane_parent_handoffs(lane_dir),
+                composition_topology=composition_topology,
             )
             outcome.update({"status": "completed", "handoff": handoff})
         except IntegrityError as exc:
@@ -1184,6 +1558,7 @@ def _run_round(
                 lane_dir = round_dir / lane["path"]
                 future = pool.submit(
                     _run_lane,
+                    root=root,
                     lane_dir=lane_dir,
                     lane_id=lane["lane_id"],
                     round_id=round_id,
@@ -1198,6 +1573,7 @@ def _run_round(
                     require_execution=plan.get("purpose") in {"candidate-expansion", "recombination", "evidence-recombination", "adaptive-frontier"},
                     lineage_id=lane.get("lineage_id"),
                     lane_role=str(lane.get("lane_role", plan.get("purpose", "legacy"))),
+                    composition_topology=lane.get("composition_topology"),
                     cancel_event=cancel_event,
                 )
                 futures[future] = lane["lane_id"]
@@ -1249,6 +1625,7 @@ def aggregate_round(root: Path, *, round_id: str) -> dict[str, Any]:
         try:
             handoffs.append(
                 _validate_handoff(
+                    root,
                     path,
                     lane["lane_id"],
                     require_execution=plan.get("purpose") in {"candidate-expansion", "recombination", "evidence-recombination", "adaptive-frontier"},
@@ -1256,6 +1633,7 @@ def aggregate_round(root: Path, *, round_id: str) -> dict[str, Any]:
                     lineage_id=lane.get("lineage_id"),
                     lane_role=str(lane.get("lane_role", plan.get("purpose", "legacy"))),
                     parent_handoffs=_load_lane_parent_handoffs(round_dir / lane["path"]),
+                    composition_topology=lane.get("composition_topology"),
                 )
             )
         except IntegrityError as exc:
@@ -1294,6 +1672,7 @@ def _fitness(handoff: dict[str, Any]) -> tuple[int, ...]:
     source_faithful_execution = int(
         witness.get("source_faithful") is True
         and handoff.get("execution", {}).get("ran") is True
+        and _LEVEL.get(str(verified_level), 0) >= _LEVEL["E3"]
         and setup_taint >= 2
     )
     open_count = len(open_prerequisite_ids(handoff))
@@ -1325,17 +1704,21 @@ def _population_handoffs(aggregate: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _rsa_eligible(handoff: dict[str, Any]) -> bool:
     """Retain executed primitives whose deployment extension is blocked."""
-    if handoff.get("status") in {"candidate", "near-miss"}:
-        return True
-    if needs_witness_closure(handoff):
-        return True
     execution = handoff.get("execution", {})
     verified = handoff.get("runtime_verification", {}).get("evidence_level", "E0")
+    execution_grounded = (
+        execution.get("ran") is True
+        and _LEVEL.get(str(verified), 0) >= _LEVEL["E3"]
+        and handoff.get("runtime_verification", {}).get("runtime_evidence_bound") is True
+    )
+    if handoff.get("status") in {"candidate", "near-miss"}:
+        return execution_grounded and bool(handoff.get("evidence"))
+    if needs_witness_closure(handoff):
+        return execution_grounded
     return (
         handoff.get("status") == "blocked"
-        and execution.get("ran") is True
+        and execution_grounded
         and execution.get("property_violated") is True
-        and _LEVEL.get(str(verified), 0) >= _LEVEL["E3"]
         and bool(handoff.get("evidence"))
     )
 
@@ -1609,11 +1992,44 @@ def _export_parent_packet(root: Path, destination: Path, label: str, handoff: di
             target.chmod(0o444)
         exported.append({"reference": reference, "sha256": digest, "file": f"files/{digest}"})
     write_json_atomic(packet / "handoff.json", handoff, mode=0o444)
+    runtime_exported = []
+
+    def export_runtime(relative: Path) -> None:
+        source = root / relative
+        if not source.is_file():
+            raise IntegrityError(f"parent runtime record is missing: {relative.as_posix()}")
+        target = packet / "runtime" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        target.chmod(0o444)
+        runtime_exported.append({
+            "record": relative.as_posix(),
+            "sha256": file_sha256(source),
+            "file": target.relative_to(packet).as_posix(),
+        })
+
+    for run_id in filter(None, (verification.get("support_run_id"), verification.get("control_run_id"))):
+        for name in ("plan.json", "plan.sha256", "receipt.json", "receipt.sha256", "observation.json", "observation.sha256"):
+            export_runtime(Path("runs") / str(run_id) / name)
+    for replay_id in filter(None, (verification.get("support_replay_id"), verification.get("control_replay_id"))):
+        export_runtime(Path("replays") / f"{replay_id}.json")
+        export_runtime(Path("replays") / str(replay_id) / "verification.json")
+        export_runtime(Path("replays") / str(replay_id) / "verification.sha256")
+    continuation = verification.get("continuation")
+    if isinstance(continuation, dict):
+        export_runtime(Path("continuations") / f"{continuation['continuation_id']}.json")
+        export_runtime(Path("continuations") / f"{continuation['attempt_id']}.json")
+    composition = verification.get("composition")
+    if isinstance(composition, dict):
+        export_runtime(Path("compositions") / f"{composition['composition_id']}.json")
+        for component_id in composition.get("components", []):
+            export_runtime(Path("compositions") / f"{component_id}.json")
     manifest = {
         "origin_round": origin_round,
         "origin_lane_id": origin_lane,
         "closure_mode": closure_mode(handoff),
         "files": exported,
+        "runtime_records": runtime_exported,
     }
     write_json_atomic(packet / "manifest.json", manifest, mode=0o444)
     return manifest
@@ -2170,7 +2586,17 @@ def evolve_population(
                     })
                 if outcomes:
                     record_lineage_attempts(root, generation=generation, outcomes=outcomes)
-                stop_reason = "protected-witness-closure-failed" if missing_closure else "insufficient-valid-partial-generation"
+                binding_pending = any(
+                    "runtime-evidence binding" in str(result.get("handoff_error", ""))
+                    for result in result_by_lane.values()
+                )
+                stop_reason = (
+                    "runtime-evidence-binding-required"
+                    if binding_pending
+                    else "protected-witness-closure-failed"
+                    if missing_closure
+                    else "insufficient-valid-partial-generation"
+                )
                 history.append(
                     {
                         "generation": generation,

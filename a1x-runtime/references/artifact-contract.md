@@ -16,6 +16,8 @@ The runtime does not make the full campaign tamper-evident against a malicious l
 
 A continuation result is not inherited prose. The parent replay and preserved assertions are one evidence relationship; the distinct observed extension run and its clean replay are another. An operational failure may omit the extension pair but cannot count as semantic stagnation or prerequisite closure. A within-transaction waypoint is a trace coordinate inside the enclosing top-level transaction, never a resumable blockchain state.
 
+Scale-lane artifacts are not runtime execution records. The host-owned scale binding re-resolves sealed plans, receipts, observations, and replay verifications, then requires the selected lane artifact to equal a named run artifact by SHA-256. E4 also rechecks the runtime's paired-control contract. Unary protected work must bind the exact continuation attempt; K=2 must bind the exact executable composition. Without that binding the handoff remains E1 and cannot affect RSA selection, fitness progress, or closure accounting.
+
 ## Typed evidence references
 
 Coverage, frontier, and impact records do not accept persuasive prose as evidence. They resolve typed references when the record is created and re-resolve them during completion assessment:

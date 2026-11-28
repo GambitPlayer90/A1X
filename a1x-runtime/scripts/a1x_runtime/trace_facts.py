@@ -30,6 +30,13 @@ def _hex_word(value: Any) -> str | None:
         return None
 
 
+def _address_word(value: Any) -> str | None:
+    word = _hex_word(value)
+    if word is None:
+        return None
+    return f"0x{int(word, 16) & ((1 << 160) - 1):040x}"
+
+
 def _stack(log: dict[str, Any]) -> list[str]:
     value = log.get("stack")
     return value if isinstance(value, list) and all(isinstance(item, str) for item in value) else []
@@ -55,11 +62,17 @@ def _json_document(path: Path) -> Any:
 
 def _unwrap_trace(document: Any) -> dict[str, Any]:
     value = document
+    context: dict[str, Any] = {}
     for _ in range(4):
         if not isinstance(value, dict):
             break
+        for key in ("root_address", "address", "to", "contractAddress", "from", "transactionHash"):
+            if key in value and key not in context:
+                context[key] = value[key]
         if isinstance(value.get("structLogs"), list):
-            return value
+            trace = dict(value)
+            trace["_a1x_context"] = context
+            return trace
         if isinstance(value.get("trace"), dict):
             value = value["trace"]
             continue
@@ -68,20 +81,182 @@ def _unwrap_trace(document: Any) -> dict[str, Any]:
             continue
         break
     if isinstance(value, dict) and ("pre" in value or "post" in value):
-        return value
+        trace = dict(value)
+        trace["_a1x_context"] = context
+        return trace
     raise ValidationError("unsupported trace document; expected structLogs or prestate diff")
 
 
-def _reverted_write(logs: list[dict[str, Any]], index: int, depth: int, top_failed: bool) -> bool:
-    if top_failed and depth == 1:
-        return True
-    for later in logs[index + 1 :]:
-        later_depth = int(later.get("depth", depth))
-        if later_depth < depth:
-            return False
-        if later_depth == depth and str(later.get("op", "")).upper() in {"REVERT", "INVALID"}:
-            return True
-    return False
+def _explicit_address(log: dict[str, Any]) -> str | None:
+    for key in ("storageOwner", "storage_owner", "contract", "address"):
+        if key in log:
+            address = _address_word(log.get(key))
+            if address is not None:
+                return address
+    return None
+
+
+def _call_target(op: str, stack: list[str]) -> str | None:
+    if op in {"CALL", "CALLCODE", "DELEGATECALL", "STATICCALL"} and len(stack) >= 2:
+        return _address_word(stack[-2])
+    return None
+
+
+def _frame_path(value: tuple[int, ...]) -> list[int]:
+    return list(value)
+
+
+def _call_frames(
+    logs: list[dict[str, Any]],
+    *,
+    top_failed: bool,
+    root_address: str | None,
+) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]], dict[int, tuple[int, ...]]]:
+    """Reconstruct call ancestry so state facts retain storage and revert ownership."""
+    if not logs:
+        return {}, [], {}
+    first_depth = int(logs[0].get("depth", 0))
+    frames: dict[tuple[int, ...], dict[str, Any]] = {}
+    active: dict[int, tuple[int, ...]] = {}
+    index_frames: dict[int, dict[str, Any]] = {}
+    child_by_call: dict[int, tuple[int, ...]] = {}
+    child_counts: defaultdict[tuple[int, ...], int] = defaultdict(int)
+    last_at_depth: dict[int, tuple[int, dict[str, Any]]] = {}
+
+    def create_frame(
+        *,
+        depth: int,
+        parent_path: tuple[int, ...] | None,
+        call_index: int | None,
+        call_op: str,
+        target: str | None,
+        explicit: str | None,
+    ) -> dict[str, Any]:
+        if parent_path is None:
+            path = (sum(1 for item in frames if len(item) == 1),)
+            storage_owner = explicit or root_address
+            executing_address = explicit or root_address
+            storage_context = f"address:{storage_owner}" if storage_owner else "frame:" + ".".join(map(str, path))
+        else:
+            child = child_counts[parent_path]
+            child_counts[parent_path] += 1
+            path = (*parent_path, child)
+            parent = frames[parent_path]
+            executing_address = explicit or target
+            if call_op in {"DELEGATECALL", "CALLCODE"}:
+                storage_owner = parent.get("storage_owner")
+                storage_context = str(parent["storage_context"])
+            else:
+                storage_owner = explicit or target
+                storage_context = f"address:{storage_owner}" if storage_owner else "frame:" + ".".join(map(str, path))
+        frame = {
+            "path": path,
+            "depth": depth,
+            "parent_path": parent_path,
+            "call_index": call_index,
+            "call_op": call_op,
+            "executing_address": executing_address,
+            "storage_owner": storage_owner,
+            "storage_context": storage_context,
+            "direct_revert": False,
+            "reverted": False,
+            "start_index": None,
+            "end_index": None,
+        }
+        frames[path] = frame
+        active[depth] = path
+        if call_index is not None:
+            child_by_call[call_index] = path
+        return frame
+
+    create_frame(
+        depth=first_depth,
+        parent_path=None,
+        call_index=None,
+        call_op="ROOT",
+        target=root_address,
+        explicit=_explicit_address(logs[0]),
+    )
+    for index, log in enumerate(logs):
+        depth = int(log.get("depth", first_depth))
+        for stale_depth in sorted((item for item in active if item > depth), reverse=True):
+            active.pop(stale_depth, None)
+        explicit = _explicit_address(log)
+        frame = frames.get(active.get(depth, ()))
+        if frame is None:
+            parent_depth = max((item for item in active if item < depth), default=None)
+            parent_path = active.get(parent_depth) if parent_depth is not None else None
+            call_index = None
+            call_op = "UNKNOWN"
+            target = None
+            if parent_depth is not None and parent_depth in last_at_depth:
+                candidate_index, candidate = last_at_depth[parent_depth]
+                candidate_op = str(candidate.get("op", "")).upper()
+                if candidate_op in CALL_OPS:
+                    call_index = candidate_index
+                    call_op = candidate_op
+                    target = _call_target(candidate_op, _stack(candidate))
+            frame = create_frame(
+                depth=depth,
+                parent_path=parent_path,
+                call_index=call_index,
+                call_op=call_op,
+                target=target,
+                explicit=explicit,
+            )
+        elif explicit is not None and frame.get("executing_address") not in {None, explicit}:
+            # Enriched/compressed traces can identify sibling frames without
+            # retaining the intervening parent opcode. Keep them separate.
+            parent_depth = max((item for item in active if item < depth), default=None)
+            parent_path = active.get(parent_depth) if parent_depth is not None else None
+            frame = create_frame(
+                depth=depth,
+                parent_path=parent_path,
+                call_index=None,
+                call_op="ENRICHED",
+                target=explicit,
+                explicit=explicit,
+            )
+        elif explicit is not None and frame.get("executing_address") is None:
+            frame["executing_address"] = explicit
+            if frame.get("call_op") not in {"DELEGATECALL", "CALLCODE"}:
+                frame["storage_owner"] = explicit
+                frame["storage_context"] = f"address:{explicit}"
+        if frame["start_index"] is None:
+            frame["start_index"] = index
+        frame["end_index"] = index
+        op = str(log.get("op", "")).upper()
+        if op in {"REVERT", "INVALID"} or bool(log.get("error")):
+            frame["direct_revert"] = True
+        index_frames[index] = frame
+        last_at_depth[depth] = (index, log)
+    if top_failed:
+        for path, frame in frames.items():
+            if len(path) == 1:
+                frame["direct_revert"] = True
+    for path in sorted(frames, key=len):
+        frame = frames[path]
+        parent = frames.get(frame.get("parent_path"))
+        frame["reverted"] = bool(frame["direct_revert"] or (parent and parent["reverted"]))
+    public_frames = [
+        {
+            "path": _frame_path(frame["path"]),
+            "depth": frame["depth"],
+            "parent_path": _frame_path(frame["parent_path"]) if frame["parent_path"] is not None else None,
+            "call_index": frame["call_index"],
+            "call_op": frame["call_op"],
+            "executing_address": frame["executing_address"],
+            "storage_owner": frame["storage_owner"],
+            "storage_context": frame["storage_context"],
+            "storage_context_resolved": frame["storage_owner"] is not None,
+            "direct_revert": frame["direct_revert"],
+            "reverted": frame["reverted"],
+            "start_index": frame["start_index"],
+            "end_index": frame["end_index"],
+        }
+        for _, frame in sorted(frames.items())
+    ]
+    return index_frames, public_frames, child_by_call
 
 
 def _state_diff(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -152,6 +327,7 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
         return {
             "format": "prestate-diff",
             "failed": None,
+            "frames": [],
             "calls": [],
             "loads": [],
             "writes": [],
@@ -165,6 +341,20 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
         }
     normalized_logs = [item for item in logs if isinstance(item, dict)]
     top_failed = bool(trace.get("failed"))
+    context = trace.get("_a1x_context") if isinstance(trace.get("_a1x_context"), dict) else {}
+    root_address = next(
+        (
+            address
+            for key in ("root_address", "to", "address", "contractAddress")
+            if (address := _address_word(context.get(key))) is not None
+        ),
+        None,
+    )
+    index_frames, frames, child_by_call = _call_frames(
+        normalized_logs,
+        top_failed=top_failed,
+        root_address=root_address,
+    )
     calls = []
     loads = []
     writes = []
@@ -175,7 +365,18 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
         stack = _stack(log)
         depth = int(log.get("depth", 0))
         pc = int(log.get("pc", 0))
-        base = {"index": index, "pc": pc, "depth": depth, "op": op}
+        frame = index_frames.get(index, {})
+        base = {
+            "index": index,
+            "pc": pc,
+            "depth": depth,
+            "op": op,
+            "frame_path": _frame_path(frame.get("path", ())),
+            "executing_address": frame.get("executing_address"),
+            "storage_owner": frame.get("storage_owner"),
+            "storage_context": frame.get("storage_context"),
+            "storage_context_resolved": frame.get("storage_owner") is not None,
+        }
         if op in STORE_OPS:
             slot = _hex_word(stack[-1]) if len(stack) >= 1 else None
             value = _hex_word(stack[-2]) if len(stack) >= 2 else None
@@ -185,7 +386,7 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
                     "storage": STORE_OPS[op],
                     "slot": slot,
                     "value": value,
-                    "reverted": _reverted_write(normalized_logs, index, depth, top_failed),
+                    "reverted": bool(frame.get("reverted")),
                     "transaction_scoped": op == "TSTORE",
                 }
             )
@@ -199,20 +400,28 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
                 }
             )
         if op in CALL_OPS:
-            target = _hex_word(stack[-2]) if op in {"CALL", "CALLCODE", "DELEGATECALL", "STATICCALL"} and len(stack) >= 2 else None
+            target = _call_target(op, stack)
             value = _hex_word(stack[-3]) if op in {"CALL", "CALLCODE"} and len(stack) >= 3 else None
-            calls.append({**base, "target": target, "value": value})
+            child_path = child_by_call.get(index)
+            calls.append(
+                {
+                    **base,
+                    "target": target,
+                    "value": value,
+                    "child_frame_path": _frame_path(child_path) if child_path is not None else None,
+                }
+            )
         if op in HALT_OPS:
             halt = {**base, "error": log.get("error"), "stack_tail": [_hex_word(item) for item in stack[-4:]]}
             halts.append(halt)
             if op in {"REVERT", "INVALID"}:
                 reverts.append(halt)
-    grouped: dict[tuple[str, int, str | None], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str | None], list[dict[str, Any]]] = defaultdict(list)
     for write in writes:
-        grouped[(write["storage"], write["depth"], write["slot"])].append(write)
+        grouped[(write["storage"], str(write["storage_context"]), write["slot"])].append(write)
     overwrites = []
     transient_windows = []
-    for (storage, depth, slot), values in sorted(grouped.items(), key=lambda item: str(item[0])):
+    for (storage, storage_context, slot), values in sorted(grouped.items(), key=lambda item: str(item[0])):
         distinct = []
         for value in values:
             if value["value"] not in distinct:
@@ -221,7 +430,10 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
             overwrites.append(
                 {
                     "storage": storage,
-                    "depth": depth,
+                    "storage_context": storage_context,
+                    "storage_owner": values[0]["storage_owner"],
+                    "storage_context_resolved": values[0]["storage_context_resolved"],
+                    "frame_paths": [item["frame_path"] for item in values],
                     "slot": slot,
                     "values": distinct,
                     "write_indices": [item["index"] for item in values],
@@ -236,7 +448,10 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
                 transient_windows.append(
                     {
                         "storage": storage,
-                        "depth": depth,
+                        "storage_context": storage_context,
+                        "storage_owner": values[0]["storage_owner"],
+                        "storage_context_resolved": values[0]["storage_context_resolved"],
+                        "frame_paths": [item["frame_path"] for item in values],
                         "slot": slot,
                         "open_write_index": first,
                         "close_write_index": last,
@@ -251,6 +466,7 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
         "failed": top_failed,
         "gas": trace.get("gas"),
         "return_value": trace.get("returnValue"),
+        "frames": frames,
         "calls": calls,
         "loads": loads,
         "writes": writes,
@@ -262,7 +478,12 @@ def extract_trace_facts(document: Any, *, declared_metrics: list[dict[str, Any]]
         "residuals": _residuals(declared_metrics or []),
         "limitations": [
             "struct logs expose executed opcodes, not protocol meaning",
-            "storage ownership across CALL/DELEGATECALL requires call-frame address enrichment",
+            *(
+                ["one or more storage owners remain unresolved; those writes are isolated by call frame and are not merged across unknown contexts"]
+                if any(frame.get("storage_context_resolved") is not True for frame in frames)
+                else []
+            ),
+            "CREATE/CREATE2 storage ownership requires an enriched address or a separately derived creation address",
             "revert stack operands are diagnostic and are not automatically a sound path constraint",
         ],
     }

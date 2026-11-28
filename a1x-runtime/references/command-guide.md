@@ -210,6 +210,13 @@ Candidate creation also creates a mandatory four-lane expansion round. Run it ev
   --axis "numeric boundary" --axis "strongest intended-behavior refutation"
 
 "$A1X_CLI" scale run --root "$A1X_ROOT" --round ROUND-0001 --parallel 4 --lane-forks auto --cyber-access-program standard
+# Reproduce a surviving lane through `run plan`, `run execute`, `run observe`,
+# and `replay verify`, then bind the exact copied run artifact. Add the three
+# control flags for E4. Protected K=1 also adds `--continuation`/`--attempt`;
+# K=2 uses `--composition` instead.
+"$A1X_CLI" scale bind-evidence --root "$A1X_ROOT" --round ROUND-0001 --lane LANE-0001 \
+  --support-run RUN-0007 --support-replay REPLAY-0003 --support-artifact stdout.log \
+  --control-run RUN-0008 --control-replay REPLAY-0004 --control-artifact stdout.log
 "$A1X_CLI" scale aggregate --root "$A1X_ROOT" --round ROUND-0001
 "$A1X_CLI" scale auto-select --root "$A1X_ROOT" --round ROUND-0001 --maximum 6
 "$A1X_CLI" scale select --root "$A1X_ROOT" --round ROUND-0001 \
@@ -220,11 +227,15 @@ Candidate creation also creates a mandatory four-lane expansion round. Run it ev
 "$A1X_CLI" scale evolve --root "$A1X_ROOT" --parent-round ROUND-0001 \
   --generations 3 --adaptive-extra-generations 3 --children 3 --closure-lanes 1 --fresh-lanes 1 --stagnation-rounds 2 --parallel 4 \
   --lane-forks auto
+# Evolution stops at the host evidence boundary. Bind the emitted child round,
+# merge it with its parent, then resume from the returned population-pool ID.
+"$A1X_CLI" scale merge --root "$A1X_ROOT" \
+  --parent-round ROUND-0001 --child-round ROUND-0002 --maximum 8
 ```
 
 Omit `--model` and `--reasoning` to use the signed-in Codex defaults. `--cyber-access-program standard` is the default and explicitly identifies the authorized defensive research tier to Codex; select `daybreak_blue` or `daybreak_red` only when the signed-in account has that program. Selecting a value does not grant access. `--closure-lanes` reserves child slots for single-parent witness closure before pairwise RSA. `--lane-forks auto` allocates a credential-free writable fork when the pinned campaign chain and host RPC variable are available; `require` fails closed and `off` disables allocation. The coordinator probes direct RPC, the HTTP bridge, and MCP before starting the lane and records `.a1x/fork-transport.json`. Inside a lane, use `a1x-lane-fork rpc` for direct calls and `exec ... @fork` for Forge/Cast when `http_bridge.ready` is true. API-key environment variables are removed from lane processes unless `--allow-env-auth` is explicitly set. Lanes use writable temporary home/state directories and mode-restricted temporary copies of the minimum Codex credential/config state. Worker writes cannot modify the operator originals. Lanes run ephemerally without unrelated user rules.
 
-Every accepted handoff names the tested obligation, the discriminator, and a writer/guard/consumer/state/property causal identity. Safe deduplication additionally requires exact attacker-model and reached-state-shape anchors plus the ordered transition sequence. Missing or coarse identity remains unique. Its evidence paths must resolve inside the lane. Runtime-derived artifact hashes and causal keys—not narrative wording—control evidence fitness and deduplication.
+Every accepted handoff names the tested obligation, the discriminator, and a writer/guard/consumer/state/property causal identity. Safe deduplication additionally requires exact attacker-model and reached-state-shape anchors plus the ordered transition sequence. Missing or coarse identity remains unique. Its evidence paths must resolve inside the lane. Runtime-derived artifact hashes and causal keys—not narrative wording—control evidence fitness and deduplication. Lane files alone are capped at E1. A host binding must connect E3/E4 to sealed support/control runs, immutable observations, clean replays, and exact artifact hashes. Unary protected children additionally bind to a machine-checked continuation attempt; K=2 children bind to an executable composition record.
 
 Manual selection cannot erase a distinct lead: omitted candidate/near-miss lanes enter the reserve automatically. `--drop` is accepted only when the runtime can match the lane to a retained exact artifact-bound duplicate.
 
